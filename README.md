@@ -16,4 +16,6 @@ Without pointer lock, left/right arrows turn.
 set the start; `still=1` freezes time and input (used for screenshots).
 
 **Dev:** `npm test` runs the world-generation and collision tests (Node 24, no dependencies).
-`tools/shot.sh "<query>" out.png [W,H]` takes a headless Chrome screenshot.
+`npm run test:visual` runs headless-Chrome visual checks (rain and motes stay put when the
+map window re-centres or the player crosses tiles). `tools/shot.sh "<query>" out.png [W,H]`
+takes a screenshot.

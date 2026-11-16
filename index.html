@@ -97,6 +97,7 @@
     if (!force && Math.abs(state.pos.x - cx) <= 12 && Math.abs(state.pos.y - cy) <= 12) return;
     origin.x = Math.floor(state.pos.x) - WIN / 2;
     origin.y = Math.floor(state.pos.y) - WIN / 2;
+    if (STILL && params.has('ox')) { origin.x = num('ox', 0) | 0; origin.y = num('oy', 0) | 0; } // test hook
     World.fillWindow(origin.x, origin.y, WIN, seed, mapData);
     gl.bindTexture(gl.TEXTURE_2D, mapTex);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, WIN, WIN, gl.RED, gl.UNSIGNED_BYTE, mapData);
@@ -130,6 +131,8 @@
   uint hu(uint x) { x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16; return x; }
   uint h3(int a, int b, int c) { return hu(uint(a) ^ hu(uint(b) ^ hu(uint(c) + 0x9e3779b9u))); }
   float hf(uint h) { return float(h >> 8) / 16777216.0; }
+  // Non-negative modulo with only defined (non-negative) operands for %.
+  int pmod(int x, int m) { return x >= 0 ? x % m : m - 1 - ((-x - 1) % m); }
 
   bool wall(ivec2 t) {
     if (t.x < 0 || t.y < 0 || t.x >= WIN || t.y >= WIN) return false;
@@ -141,15 +144,16 @@
   // Returns rgb.
   vec3 rain(vec2 g, ivec2 ci, int key, float accent) {
     int col = ci.x;
-    float along = g.y;
     float trail = 0.0, head = 0.0;
     for (int k = 0; k < 3; k++) {
       uint hc = h3(col, key, k);
       float speed = mix(5.0, 13.0, hf(hc));            // cells per second
-      float period = mix(26.0, 60.0, hf(hu(hc + 1u)));
+      int P = 26 + int(hf(hu(hc + 1u)) * 34.0);         // integer period: world-stable phase
+      float period = float(P);
       float len = mix(6.0, 18.0, hf(hu(hc + 2u)));
       float headPos = mod(uTime * speed + hf(hu(hc + 3u)) * period, period);
-      float d = mod(headPos - floor(along), period);    // cells behind the head
+      // Phase from the world-integer row index, so re-centring the map window can't move drops.
+      float d = mod(headPos - float(pmod(ci.y, P)), period);  // cells behind the head
       if (d < len) {
         trail = max(trail, exp(-d * (3.0 / len)));
         if (d < 1.0) head = 1.0;
@@ -374,10 +378,13 @@
 
   // Motes: faint specks of light drifting in the air around the viewer.
   const MOTES = 40, MOTE_R = 6;
-  const motes = Array.from({ length: MOTES }, () => ({
-    x: (Math.random() * 2 - 1) * MOTE_R, y: (Math.random() * 2 - 1) * MOTE_R, h: 0.1 + Math.random() * 1.5,
-    vx: (Math.random() - 0.5) * 0.08, vy: (Math.random() - 0.5) * 0.08, vh: (Math.random() - 0.5) * 0.04,
-    a: 0.25 + Math.random() * 0.35,
+  const mr = (i, k) => World.hash2(i, k, seed ^ 0x6d6f);
+  // Motes live in world coordinates; each frame they wrap into a box centred on the viewer.
+  const moteWrap = (v) => ((v + MOTE_R) % (2 * MOTE_R) + 2 * MOTE_R) % (2 * MOTE_R) - MOTE_R;
+  const motes = Array.from({ length: MOTES }, (_, i) => ({
+    x: (mr(i, 0) * 2 - 1) * MOTE_R, y: (mr(i, 1) * 2 - 1) * MOTE_R, h: 0.1 + mr(i, 2) * 1.5,
+    vx: (mr(i, 3) - 0.5) * 0.08, vy: (mr(i, 4) - 0.5) * 0.08, vh: (mr(i, 5) - 0.5) * 0.04,
+    a: 0.25 + mr(i, 6) * 0.35,
   }));
   const moteData = new Float32Array(MOTES * 4);
   function lineOfSight(ax, ay, bx, by) {
@@ -394,11 +401,11 @@
     let n = 0;
     for (const m of motes) {
       m.x += m.vx * dt; m.y += m.vy * dt; m.h += m.vh * dt;
-      // Keep motes in a box around the viewer (relative coords wrap).
-      const wrap = (v) => ((v + MOTE_R) % (2 * MOTE_R) + 2 * MOTE_R) % (2 * MOTE_R) - MOTE_R;
-      m.x = wrap(m.x); m.y = wrap(m.y);
+      m.x = state.pos.x + moteWrap(m.x - state.pos.x);
+      m.y = state.pos.y + moteWrap(m.y - state.pos.y);
       if (m.h < 0.05 || m.h > 1.65) m.vh = -m.vh;
-      const wx = Math.floor(state.pos.x) + m.x, wy = Math.floor(state.pos.y) + m.y;
+      const wx = m.x, wy = m.y;
+      m.lastW = [wx, wy];
       const rx = wx - state.pos.x, ry = wy - state.pos.y;
       const z = rx * c + ry * s;                      // depth
       if (z < 0.3) continue;
@@ -438,7 +445,10 @@
     blurPass(targets.b, targets.a, 2, 0, 0);
     blurPass(targets.a, targets.b, 0, 2, 0);
     const n = updateMotes(dt);
-    if (STILL) document.body.dataset.motes = n;  // test hook
+    if (STILL) {  // test hooks
+      document.body.dataset.motes = n;
+      document.body.dataset.moteWorld = JSON.stringify(motes.map((m) => m.lastW.map((v) => +v.toFixed(4))));
+    }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.useProgram(composite.p);
