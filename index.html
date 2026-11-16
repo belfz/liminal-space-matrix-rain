@@ -17,6 +17,13 @@
   #overlay .title { font-size: 28px; letter-spacing: 0.4em; }
   #overlay .hint { opacity: 0.6; font-size: 12px; }
   #overlay.hidden { display: none; }
+  #overlay .setting { display: flex; gap: 0.6em; align-items: center; font-size: 13px; }
+  #overlay .setting button {
+    font: inherit; color: #00ff41; background: none; border: 1px solid rgba(0, 255, 65, 0.35);
+    padding: 0.2em 0.7em; cursor: pointer; opacity: 0.6; text-shadow: inherit; letter-spacing: 0.1em;
+  }
+  #overlay .setting button:hover { opacity: 0.9; }
+  #overlay .setting button.on { opacity: 1; border-color: #00ff41; box-shadow: 0 0 8px rgba(0, 255, 65, 0.5); }
 </style>
 </head>
 <body>
@@ -24,6 +31,9 @@
 <div id="overlay">
   <div class="title">LIMINAL RAIN</div>
   <div>click to enter</div>
+  <div class="setting">rain density
+    <button data-density="1">1&times;</button><button data-density="2">2&times;</button><button data-density="3">3&times;</button>
+  </div>
   <div class="hint">WASD / arrows to move &middot; mouse to look &middot; esc to leave</div>
 </div>
 <script src="src/world.js"></script>
@@ -33,6 +43,13 @@
   const params = new URLSearchParams(location.search);
   const num = (k, d) => (params.has(k) ? Number(params.get(k)) : d);
   const STILL = params.get('still') === '1';
+
+  // ---------- settings (main menu; remembered in localStorage, URL params override) ----------
+  const DENSITIES = [1, 2, 3];
+  const store = { get: (k) => { try { return localStorage.getItem(k); } catch (_) { return null; } },
+                  set: (k, v) => { try { localStorage.setItem(k, v); } catch (_) { /* private mode */ } } };
+  const pickDensity = (v) => (DENSITIES.includes(Number(v)) ? Number(v) : null);
+  const settings = { density: pickDensity(params.get('density')) || pickDensity(store.get('lr.density')) || 2 };
 
   const canvas = document.getElementById('c');
   const overlay = document.getElementById('overlay');
@@ -120,6 +137,7 @@
   uniform vec2 uPitchCS;   // cos, sin of pitch
   uniform float uEye;      // eye height (tiles)
   uniform float uTime;
+  uniform int uDens;       // glyph density: cells per tile scale by this (1, 2, 3)
   uniform ivec2 uOrigin;   // window origin in world tiles
   uniform sampler2D uMap, uAtlas;
   out vec4 outColor;
@@ -147,12 +165,15 @@
   vec3 rain(vec2 g, ivec2 ci, int key, float accent) {
     int col = ci.x;
     float trail = 0.0, head = 0.0;
+    float D = float(uDens);
     for (int k = 0; k < 3; k++) {
       uint hc = h3(col, key, k);
-      float speed = mix(5.0, 13.0, hf(hc));            // cells per second
-      int P = 26 + int(hf(hu(hc + 1u)) * 34.0);         // integer period: world-stable phase
+      // Speeds, periods and trail lengths scale with density so streams keep the same
+      // world-space speed and length; only the glyphs get finer.
+      float speed = mix(5.0, 13.0, hf(hc)) * D;        // cells per second
+      int P = (26 + int(hf(hu(hc + 1u)) * 34.0)) * uDens; // integer period: world-stable phase
       float period = float(P);
-      float len = mix(6.0, 18.0, hf(hu(hc + 2u)));
+      float len = mix(6.0, 18.0, hf(hu(hc + 2u))) * D;
       float headPos = mod(uTime * speed + hf(hu(hc + 3u)) * period, period);
       // Phase from the world-integer row index, so re-centring the map window can't move drops.
       float d = mod(headPos - float(pmod(ci.y, P)), period);  // cells behind the head
@@ -212,8 +233,8 @@
       int plane = side == 0 ? m.x + (st.x < 0 ? 1 : 0) + uOrigin.x : m.y + (st.y < 0 ? 1 : 0) + uOrigin.y;
       int face = side * 2 + (side == 0 ? (st.x > 0 ? 0 : 1) : (st.y > 0 ? 0 : 1));
       int uo = int(us) * (side == 0 ? uOrigin.y : uOrigin.x);
-      vec2 g = vec2(u * 15.0, (WALL_H - hWall) * 11.0);
-      ivec2 ci = ivec2(floor(g)) + ivec2(uo * 15, 0);
+      vec2 g = vec2(u * 15.0, (WALL_H - hWall) * 11.0) * float(uDens);
+      ivec2 ci = ivec2(floor(g)) + ivec2(uo * 15 * uDens, 0);
       // Vertical tile edges (corners, door jambs) and floor/ceiling seams read brighter.
       float fu = fract(u);
       float accent = max(1.0 - smoothstep(0.0, 0.07, min(fu, 1.0 - fu)),
@@ -234,8 +255,10 @@
       bool wx = wall(mt + ivec2(1, 0)) || wall(mt - ivec2(1, 0));
       bool alongX = wy != wx ? wy : (hch & 1u) == 0u;
       float dir = (hch & 2u) == 0u ? 1.0 : -1.0;
-      vec2 g = alongX ? vec2(p.y * 11.0, p.x * 11.0 * dir) : vec2(p.x * 11.0, p.y * 11.0 * dir);
-      ivec2 off = alongX ? ivec2(uOrigin.y * 11, uOrigin.x * 11 * int(dir)) : ivec2(uOrigin.x * 11, uOrigin.y * 11 * int(dir));
+      int fc = 11 * uDens;                        // floor/ceiling cells per tile
+      float fcf = float(fc);
+      vec2 g = alongX ? vec2(p.y * fcf, p.x * fcf * dir) : vec2(p.x * fcf, p.y * fcf * dir);
+      ivec2 off = alongX ? ivec2(uOrigin.y * fc, uOrigin.x * fc * int(dir)) : ivec2(uOrigin.x * fc, uOrigin.y * fc * int(dir));
       ivec2 ci = ivec2(floor(g)) + off;
       // Floor seams along tile edges next to walls.
       col = rain(g, ci, (floorHit ? 1000003 : 2000003) + (alongX ? 0 : 7), 0.0) * 0.85;
@@ -336,6 +359,7 @@
     gl.uniform2f(scene.u.uPitchCS, Math.cos(state.pitch), Math.sin(state.pitch));
     gl.uniform1f(scene.u.uEye, 0.8 + 0.02 * Math.sin(state.bob));
     gl.uniform1f(scene.u.uTime, state.time);
+    gl.uniform1i(scene.u.uDens, settings.density);
     gl.uniform2i(scene.u.uOrigin, origin.x, origin.y);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, mapTex); gl.uniform1i(scene.u.uMap, 0);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, atlasTex); gl.uniform1i(scene.u.uAtlas, 1);
@@ -495,6 +519,15 @@
     overlay.classList.remove('hidden');
   }
   overlay.addEventListener('click', enter);
+  const densityButtons = overlay.querySelectorAll('[data-density]');
+  function showDensity() { densityButtons.forEach((b) => b.classList.toggle('on', Number(b.dataset.density) === settings.density)); }
+  densityButtons.forEach((b) => b.addEventListener('click', (e) => {
+    e.stopPropagation();   // choosing a setting doesn't enter
+    settings.density = Number(b.dataset.density);
+    store.set('lr.density', String(settings.density));
+    showDensity();
+  }));
+  showDensity();
   document.addEventListener('pointerlockerror', () => {});
   let wasLocked = false;
   document.addEventListener('pointerlockchange', () => {
@@ -554,7 +587,7 @@
   }
   requestAnimationFrame(frame);
 
-  window.LR = { state, renderScene, render, resize, gl, canvas };
+  window.LR = { state, settings, renderScene, render, resize, gl, canvas };
 })();
 </script>
 </body>

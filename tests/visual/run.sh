@@ -40,5 +40,13 @@ sys.exit(0 if ok and len(a)==len(b)>0 else 1)" "$A" "$B"; then echo "ok   motes 
 # 4. Mouse look works after "click to enter" even when pointer lock is refused.
 node tests/visual/mouse-look.mjs "file://$PWD/index.html" || fail=1
 
+# 5. Rain density: 2x means twice the glyph columns on the same wall (half the column spacing).
+#    Face-on close wall (seed=2 spawn, facing +y).
+shot "seed=2&still=1&a=1.5708&density=1" d1
+shot "seed=2&still=1&a=1.5708&density=2" d2
+P1=$(python3 tests/visual/colperiod.py "$T/d1.png"); P2=$(python3 tests/visual/colperiod.py "$T/d2.png")
+if python3 -c "import sys; r = $P1 / max($P2, 1); sys.exit(0 if $P2 > 0 and 1.7 <= r <= 2.3 else 1)"; then echo "ok   density 2x halves column spacing ($P1 px -> $P2 px)"; else echo "FAIL density 2x halves column spacing ($P1 px -> $P2 px)"; fail=1; fi
+node tests/visual/menu.mjs "file://$PWD/index.html" || fail=1
+
 rm -rf "$T"
 exit $fail

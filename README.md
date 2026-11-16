@@ -14,7 +14,10 @@ Where the browser grants pointer lock the mouse turns freely. Where it doesn't (
 previews), mouse movement still turns, and resting the cursor near an edge keeps turning
 (left/right) or tilting (top/bottom). Without pointer lock, the left/right arrows turn too.
 
-**URL params:** `seed=N` picks a different world; `x`, `y`, `a` (angle, radians), `p` (pitch, radians), `t` (time)
+**Menu:** *rain density* `1×` / `2×` / `3×` (default `2×`, remembered): how many glyph columns
+cover each surface. Higher means finer, smaller code.
+
+**URL params:** `density=1|2|3` overrides the menu setting; `seed=N` picks a different world; `x`, `y`, `a` (angle, radians), `p` (pitch, radians), `t` (time)
 set the start; `still=1` freezes time and input (used for screenshots).
 
 **Dev:** `npm test` runs the world-generation and collision tests (Node 24, no dependencies).
