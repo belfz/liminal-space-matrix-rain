@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Liminal Rain</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; cursor: none; }
+  #overlay {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 1.2em;
+    font: 15px/1.4 ui-monospace, Menlo, monospace; color: #00ff41;
+    text-shadow: 0 0 8px #00ff41; background: rgba(0, 0, 0, 0.55);
+    cursor: pointer; user-select: none; letter-spacing: 0.15em;
+  }
+  #overlay .title { font-size: 28px; letter-spacing: 0.4em; }
+  #overlay .hint { opacity: 0.6; font-size: 12px; }
+  #overlay.hidden { display: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="overlay">
+  <div class="title">LIMINAL RAIN</div>
+  <div>click to enter</div>
+  <div class="hint">WASD / arrows to move &middot; mouse to look &middot; esc to leave</div>
+</div>
+<script src="src/world.js"></script>
+<script>
+'use strict';
+(() => {
+  const params = new URLSearchParams(location.search);
+  const num = (k, d) => (params.has(k) ? Number(params.get(k)) : d);
+  const STILL = params.get('still') === '1';
+
+  const canvas = document.getElementById('c');
+  const overlay = document.getElementById('overlay');
+  const gl = canvas.getContext('webgl2', { antialias: false, alpha: false });
+  if (!gl) {
+    overlay.innerHTML = '<div class="title">LIMINAL RAIN</div><div>WebGL2 is not available in this browser.</div>';
+    return;
+  }
+
+  // ---------- state ----------
+  const seed = num('seed', 1) | 0;
+  const spawn = World.findSpawn(seed);
+  const state = {
+    pos: { x: num('x', spawn.x), y: num('y', spawn.y) },
+    angle: num('a', 0),
+    time: num('t', 10),
+    seed,
+    bob: 0,
+  };
+  const WIN = 64; // map window size in tiles
+
+  // ---------- glyph atlas ----------
+  function buildAtlas() {
+    const N = 16, S = 64;
+    const c = document.createElement('canvas');
+    c.width = c.height = N * S;
+    const g = c.getContext('2d');
+    g.fillStyle = '#000'; g.fillRect(0, 0, c.width, c.height);
+    const chars = [];
+    for (let k = 0xff66; k <= 0xff9d; k++) chars.push(String.fromCharCode(k)); // half-width katakana
+    chars.push(...'0123456789:・."=*+-<>¦|ZTJ'.split(''));
+    g.fillStyle = '#fff';
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.font = `${Math.floor(S * 0.78)}px "Hiragino Sans", "Hiragino Kaku Gothic ProN", "MS Gothic", "Noto Sans JP", monospace`;
+    for (let i = 0; i < N * N; i++) {
+      const ch = chars[i % chars.length];
+      const x = (i % N) * S + S / 2, y = Math.floor(i / N) * S + S / 2;
+      g.save(); g.translate(x, y); g.scale(-1, 1); g.fillText(ch, 0, 0); g.restore();
+    }
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return tex;
+  }
+
+  // ---------- map window ----------
+  const mapData = new Uint8Array(WIN * WIN);
+  const mapTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, mapTex);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, WIN, WIN, 0, gl.RED, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  const origin = { x: 0, y: 0 };
+  function recentre(force) {
+    const cx = origin.x + WIN / 2, cy = origin.y + WIN / 2;
+    if (!force && Math.abs(state.pos.x - cx) <= 12 && Math.abs(state.pos.y - cy) <= 12) return;
+    origin.x = Math.floor(state.pos.x) - WIN / 2;
+    origin.y = Math.floor(state.pos.y) - WIN / 2;
+    World.fillWindow(origin.x, origin.y, WIN, seed, mapData);
+    gl.bindTexture(gl.TEXTURE_2D, mapTex);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, WIN, WIN, gl.RED, gl.UNSIGNED_BYTE, mapData);
+  }
+
+  // ---------- shaders ----------
+  const VS = `#version 300 es
+  void main() {
+    vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+  }`;
+
+  const SCENE_FS = `#version 300 es
+  precision highp float;
+  precision highp int;
+  uniform vec2 uRes;
+  uniform vec2 uCam;       // camera, relative to window origin (tiles)
+  uniform vec2 uFwd, uRight;
+  uniform float uEye;      // eye height (tiles)
+  uniform float uTime;
+  uniform ivec2 uOrigin;   // window origin in world tiles
+  uniform sampler2D uMap, uAtlas;
+  out vec4 outColor;
+
+  const float K = 1.3;
+  const float WALL_H = 1.7;      // ceiling height in tiles           // projection scale (vertical half-FOV = atan(K/2))
+  const int WIN = ${WIN};
+  const vec3 GREEN = vec3(0.0, 1.0, 0.255);
+  const vec3 HEAD  = vec3(0.85, 1.0, 0.88);
+
+  uint hu(uint x) { x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16; return x; }
+  uint h3(int a, int b, int c) { return hu(uint(a) ^ hu(uint(b) ^ hu(uint(c) + 0x9e3779b9u))); }
+  float hf(uint h) { return float(h >> 8) / 16777216.0; }
+
+  bool wall(ivec2 t) {
+    if (t.x < 0 || t.y < 0 || t.x >= WIN || t.y >= WIN) return false;
+    return texelFetch(uMap, t, 0).r > 0.5;
+  }
+
+  // Rain on a surface. g = continuous cell coords (x = column, y = along flow),
+  // ci = integer cell index (world-stable), key = surface id.
+  // Returns rgb.
+  vec3 rain(vec2 g, ivec2 ci, int key, float accent) {
+    int col = ci.x;
+    float along = g.y;
+    float trail = 0.0, head = 0.0;
+    for (int k = 0; k < 3; k++) {
+      uint hc = h3(col, key, k);
+      float speed = mix(5.0, 13.0, hf(hc));            // cells per second
+      float period = mix(26.0, 60.0, hf(hu(hc + 1u)));
+      float len = mix(6.0, 18.0, hf(hu(hc + 2u)));
+      float headPos = mod(uTime * speed + hf(hu(hc + 3u)) * period, period);
+      float d = mod(headPos - floor(along), period);    // cells behind the head
+      if (d < len) {
+        trail = max(trail, exp(-d * (3.0 / len)));
+        if (d < 1.0) head = 1.0;
+      }
+    }
+    // Glyph choice: changes over time, faster inside trails.
+    uint hcell = h3(ci.x, ci.y, key);
+    float rate = mix(0.3, 2.0, hf(hcell)) + trail * 6.0;
+    uint gi = h3(ci.x, ci.y, key + int(floor(uTime * rate + hf(hu(hcell)) * 7.0))) & 255u;
+    vec2 tile = vec2(float(gi & 15u), float(gi >> 4));
+    vec2 local = fract(g);
+    vec2 auv = (tile + 0.08 + local * 0.84) / 16.0;
+    vec2 gx = dFdx(g) * (0.84 / 16.0), gy = dFdy(g) * (0.84 / 16.0);
+    float glyph = textureGrad(uAtlas, auv, gx, gy).r;
+    // Far away: cells < ~2px, fade glyph shape to an even dim texture (no shimmer).
+    float fw = max(length(dFdx(g)), length(dFdy(g)));
+    glyph = mix(glyph, 0.32, smoothstep(0.35, 1.2, fw));
+    float base = mix(0.10, 0.30, hf(hu(hcell + 7u))) * (1.0 + accent * 1.4);
+    float b = glyph * (base + trail * (1.15 + accent * 0.5));
+    return mix(GREEN * b, HEAD * glyph * 1.4, head * (1.0 - smoothstep(0.6, 1.4, fw) * 0.6));
+  }
+
+  void main() {
+    vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / uRes.y;
+    vec2 rd = uFwd + uRight * (uv.x * K);   // rd . fwd = 1, so t = perpendicular depth
+    float vy = uv.y * K;                    // height change per unit depth
+
+    // --- DDA through the map window ---
+    ivec2 m = ivec2(floor(uCam));
+    vec2 dd = abs(1.0 / rd);
+    ivec2 st = ivec2(sign(rd));
+    vec2 sd = (sign(rd) * (vec2(m) - uCam) + sign(rd) * 0.5 + 0.5) * dd;
+    int side = -1;
+    float tw = 1e9;
+    for (int i = 0; i < 48; i++) {
+      if (sd.x < sd.y) { sd.x += dd.x; m.x += st.x; side = 0; }
+      else             { sd.y += dd.y; m.y += st.y; side = 1; }
+      if (wall(m)) { tw = side == 0 ? sd.x - dd.x : sd.y - dd.y; break; }
+    }
+
+    float rlen = length(rd);
+    vec3 col = vec3(0.0);
+    float t;
+    float hWall = uEye + vy * tw;
+    if (side >= 0 && tw < 1e8 && hWall >= 0.0 && hWall <= WALL_H) {
+      // --- wall ---
+      t = tw;
+      vec2 hit = uCam + rd * t;
+      // Orient u so it always increases to the viewer's right (glyphs read the same on every face).
+      float us = side == 0 ? (st.x > 0 ? 1.0 : -1.0) : (st.y > 0 ? -1.0 : 1.0);
+      float u = us * (side == 0 ? hit.y : hit.x);
+      int plane = side == 0 ? m.x + (st.x < 0 ? 1 : 0) + uOrigin.x : m.y + (st.y < 0 ? 1 : 0) + uOrigin.y;
+      int face = side * 2 + (side == 0 ? (st.x > 0 ? 0 : 1) : (st.y > 0 ? 0 : 1));
+      int uo = int(us) * (side == 0 ? uOrigin.y : uOrigin.x);
+      vec2 g = vec2(u * 15.0, (WALL_H - hWall) * 11.0);
+      ivec2 ci = ivec2(floor(g)) + ivec2(uo * 15, 0);
+      // Vertical tile edges (corners, door jambs) and floor/ceiling seams read brighter.
+      float fu = fract(u);
+      float accent = max(1.0 - smoothstep(0.0, 0.07, min(fu, 1.0 - fu)),
+                         1.0 - smoothstep(0.0, 0.05, min(hWall, WALL_H - hWall)));
+      col = rain(g, ci, plane * 4 + face, accent);
+    } else if (vy < 0.0 || vy > 0.0) {
+      // --- floor / ceiling ---
+      bool floorHit = vy < 0.0;
+      t = floorHit ? -uEye / vy : (WALL_H - uEye) / vy;
+      vec2 p = uCam + rd * t;
+      // Flow axis and direction per chunk, so a room's floor streams one way.
+      ivec2 tileW = ivec2(floor(p)) + uOrigin;
+      ivec2 chunk = ivec2(floor(vec2(tileW) / 8.0));
+      uint hch = h3(chunk.x, chunk.y, floorHit ? 31 : 37);
+      // In corridors, stream along the corridor; elsewhere the chunk decides.
+      ivec2 mt = ivec2(floor(p));
+      bool wy = wall(mt + ivec2(0, 1)) || wall(mt - ivec2(0, 1));
+      bool wx = wall(mt + ivec2(1, 0)) || wall(mt - ivec2(1, 0));
+      bool alongX = wy != wx ? wy : (hch & 1u) == 0u;
+      float dir = (hch & 2u) == 0u ? 1.0 : -1.0;
+      vec2 g = alongX ? vec2(p.y * 11.0, p.x * 11.0 * dir) : vec2(p.x * 11.0, p.y * 11.0 * dir);
+      ivec2 off = alongX ? ivec2(uOrigin.y * 11, uOrigin.x * 11 * int(dir)) : ivec2(uOrigin.x * 11, uOrigin.y * 11 * int(dir));
+      ivec2 ci = ivec2(floor(g)) + off;
+      // Floor seams along tile edges next to walls.
+      col = rain(g, ci, (floorHit ? 1000003 : 2000003) + (alongX ? 0 : 7), 0.0) * 0.85;
+    } else {
+      t = 1e9;
+    }
+
+    float dist = t * rlen;
+    float fog = mix(0.025, 1.0, exp(-dist * 0.11));
+    outColor = vec4(col * fog, 1.0);
+  }`;
+
+  function compile(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+    return s;
+  }
+  function program(fs) {
+    const p = gl.createProgram();
+    gl.attachShader(p, compile(gl.VERTEX_SHADER, VS));
+    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    const u = {};
+    const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+    for (let i = 0; i < n; i++) { const name = gl.getActiveUniform(p, i).name; u[name] = gl.getUniformLocation(p, name); }
+    return { p, u };
+  }
+
+  let scene;
+  try { scene = program(SCENE_FS); } catch (err) {
+    overlay.classList.remove('hidden');
+    overlay.innerHTML = '<pre style="white-space:pre-wrap;max-width:90vw">' + String(err.message).replace(/</g, '&lt;') + '</pre>';
+    throw err;
+  }
+  const atlasTex = buildAtlas();
+  const vao = gl.createVertexArray();
+
+  // ---------- sizing ----------
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.max(1, Math.floor(innerWidth * dpr)), h = Math.max(1, Math.floor(innerHeight * dpr));
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  }
+  window.addEventListener('resize', resize);
+
+  function renderScene(fbo) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.useProgram(scene.p);
+    const fwd = [Math.cos(state.angle), Math.sin(state.angle)];
+    gl.uniform2f(scene.u.uRes, canvas.width, canvas.height);
+    gl.uniform2f(scene.u.uCam, state.pos.x - origin.x, state.pos.y - origin.y);
+    gl.uniform2f(scene.u.uFwd, fwd[0], fwd[1]);
+    gl.uniform2f(scene.u.uRight, -fwd[1], fwd[0]);
+    gl.uniform1f(scene.u.uEye, 0.8 + 0.02 * Math.sin(state.bob));
+    gl.uniform1f(scene.u.uTime, state.time);
+    gl.uniform2i(scene.u.uOrigin, origin.x, origin.y);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, mapTex); gl.uniform1i(scene.u.uMap, 0);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, atlasTex); gl.uniform1i(scene.u.uAtlas, 1);
+    gl.bindVertexArray(vao);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  // ---------- input ----------
+  const keys = new Set();
+  addEventListener('keydown', (e) => { keys.add(e.code); if (e.code.startsWith('Arrow')) e.preventDefault(); });
+  addEventListener('keyup', (e) => keys.delete(e.code));
+  addEventListener('blur', () => keys.clear());
+  const locked = () => document.pointerLockElement === canvas;
+  overlay.addEventListener('click', () => canvas.requestPointerLock && canvas.requestPointerLock());
+  document.addEventListener('pointerlockchange', () => overlay.classList.toggle('hidden', locked()));
+  addEventListener('mousemove', (e) => { if (locked()) state.angle += e.movementX * 0.0025; });
+  if (STILL) overlay.classList.add('hidden');
+
+  const isWall = (tx, ty) => World.tileAt(tx, ty, seed) === 1;
+  function update(dt) {
+    const k = (c) => keys.has(c);
+    const fwdIn = (k('KeyW') || k('ArrowUp') ? 1 : 0) - (k('KeyS') || k('ArrowDown') ? 1 : 0);
+    const strafe = (k('KeyD') ? 1 : 0) - (k('KeyA') ? 1 : 0)
+      + (locked() ? (k('ArrowRight') ? 1 : 0) - (k('ArrowLeft') ? 1 : 0) : 0);
+    if (!locked()) state.angle += ((k('ArrowRight') ? 1 : 0) - (k('ArrowLeft') ? 1 : 0)) * 2.2 * dt;
+    const c = Math.cos(state.angle), s = Math.sin(state.angle);
+    let dx = c * fwdIn - s * strafe, dy = s * fwdIn + c * strafe;
+    const len = Math.hypot(dx, dy);
+    if (len > 0) {
+      dx = (dx / len) * 2.2 * dt; dy = (dy / len) * 2.2 * dt;
+      state.pos = World.moveWithCollision(state.pos, dx, dy, 0.2, isWall);
+      state.bob += dt * 1.6 * Math.PI * 2;
+    }
+  }
+
+  // ---------- loop ----------
+  resize();
+  recentre(true);
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
+    last = now;
+    if (!STILL) { state.time += dt; update(dt); recentre(false); }
+    resize();
+    renderScene(null);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  window.LR = { state, renderScene, resize, gl, canvas };
+})();
+</script>
+</body>
+</html>
