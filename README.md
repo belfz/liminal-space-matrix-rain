@@ -5,7 +5,8 @@
 A first-person walk through an endless liminal space — corridors, empty halls, pillar rooms,
 doorways that keep leading on — where nothing exists except falling "matrix rain". Every wall,
 floor and ceiling is drawn as perspective glyph rain by a single WebGL2 shader; there is no
-goal, only the space.
+goal, only the space. Here and there a wall carries a fragment of text (steady,
+horizontal, often unfinished) with the rain running around it.
 
 **Run:** open `index.html` in a browser (no server, no build). Click to enter.
 
@@ -18,7 +19,7 @@ previews), mouse movement still turns, and resting the cursor near an edge keeps
 cover each surface. Higher means finer, smaller code.
 
 **URL params:** `density=1|2|3` overrides the menu setting; `seed=N` picks a different world; `x`, `y`, `a` (angle, radians), `p` (pitch, radians), `t` (time)
-set the start; `still=1` freezes time and input (used for screenshots).
+set the start; `still=1` freezes time and input (used for screenshots); `text=0` hides wall text.
 
 **Dev:** `npm test` runs the world-generation and collision tests (Node 24, no dependencies).
 `npm run test:visual` runs headless-Chrome visual checks (rain and motes stay put when the
