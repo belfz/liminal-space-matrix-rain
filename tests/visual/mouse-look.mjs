@@ -44,8 +44,20 @@ try {
   await mouse('mouseMoved', 400, 225); await sleep(100);
   const m0 = await ev('LR.state.angle'); await sleep(500);
   const m1 = await ev('LR.state.angle');
-  ok = hidden && a1 > a0 + 0.1 && e1 > e0 + 0.5 && Math.abs(m1 - m0) < 1e-9 && errors.length === 0;
-  msg = `overlay hidden=${hidden} drag ${a0}->${a1} edge ${e0}->${e1} centre ${m0}->${m1} uncaught=${JSON.stringify(errors)}`;
+  // Vertical look: moving the mouse up tilts the view up; resting at the top edge keeps tilting
+  // up to a cap below straight up; resting at the bottom edge tilts down.
+  const p0 = await ev('LR.state.pitch');
+  for (let i = 1; i <= 5; i++) { await mouse('mouseMoved', 400, 225 - i * 20); await sleep(30); }
+  await sleep(100);
+  const p1 = await ev('LR.state.pitch');
+  await mouse('mouseMoved', 400, 2); await sleep(1500);
+  const pTop = await ev('LR.state.pitch');
+  const vh = await ev('innerHeight');
+  await mouse('mouseMoved', 400, vh - 2); await sleep(2500);
+  const pBottom = await ev('LR.state.pitch');
+  const vOk = typeof p0 === 'number' && p1 > p0 + 0.1 && pTop > 1.3 && pTop < Math.PI / 2 && pBottom < -1.3 && pBottom > -Math.PI / 2;
+  ok = hidden && a1 > a0 + 0.1 && e1 > e0 + 0.5 && Math.abs(m1 - m0) < 1e-9 && vOk && errors.length === 0;
+  msg = `overlay hidden=${hidden} drag ${a0}->${a1} edge ${e0}->${e1} centre ${m0}->${m1} pitch ${p0}->${p1} top ${pTop} bottom ${pBottom} (viewport h=${vh}) uncaught=${JSON.stringify(errors)}`;
   ws.close();
 } catch (e) { msg = String(e); }
 chrome.kill(); await sleep(200); rmSync(profile, { recursive: true, force: true });

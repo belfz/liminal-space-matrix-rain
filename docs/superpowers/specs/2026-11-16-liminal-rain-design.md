@@ -18,8 +18,8 @@ and a few soft motes of light hang in the air.
 - Smooth first-person movement in the browser.
 
 ## Non-goals (for now)
-Goals, exits, story, figures or characters, sound, mobile/touch controls, looking up/down,
-stairs or height changes.
+Goals, exits, story, figures or characters, sound, mobile/touch controls,
+stairs or height changes. (Looking up/down was a non-goal; added on request — pitch capped at ~83°.)
 
 ## Anti-goals
 - A flat screen-space rain overlay with geometry hinted underneath (the reference has

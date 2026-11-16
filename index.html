@@ -48,6 +48,7 @@
   const state = {
     pos: { x: num('x', spawn.x), y: num('y', spawn.y) },
     angle: num('a', 0),
+    pitch: num('p', 0),     // radians, + looks up; clamped to +-PITCH_MAX
     time: num('t', 10),
     seed,
     bob: 0,
@@ -116,6 +117,7 @@
   uniform vec2 uRes;
   uniform vec2 uCam;       // camera, relative to window origin (tiles)
   uniform vec2 uFwd, uRight;
+  uniform vec2 uPitchCS;   // cos, sin of pitch
   uniform float uEye;      // eye height (tiles)
   uniform float uTime;
   uniform ivec2 uOrigin;   // window origin in world tiles
@@ -178,8 +180,10 @@
 
   void main() {
     vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / uRes.y;
-    vec2 rd = uFwd + uRight * (uv.x * K);   // rd . fwd = 1, so t = perpendicular depth
-    float vy = uv.y * K;                    // height change per unit depth
+    // 3D view ray, tilted by pitch: horizontal part rd, vertical part vy (per unit of t).
+    float cp = uPitchCS.x, sp = uPitchCS.y;
+    vec2 rd = uFwd * (cp - uv.y * K * sp) + uRight * (uv.x * K);
+    float vy = sp + uv.y * K * cp;
 
     // --- DDA through the map window ---
     ivec2 m = ivec2(floor(uCam));
@@ -194,7 +198,7 @@
       if (wall(m)) { tw = side == 0 ? sd.x - dd.x : sd.y - dd.y; break; }
     }
 
-    float rlen = length(rd);
+    float rlen = length(vec3(rd, vy));
     vec3 col = vec3(0.0);
     float t;
     float hWall = uEye + vy * tw;
@@ -329,6 +333,7 @@
     gl.uniform2f(scene.u.uCam, state.pos.x - origin.x, state.pos.y - origin.y);
     gl.uniform2f(scene.u.uFwd, fwd[0], fwd[1]);
     gl.uniform2f(scene.u.uRight, -fwd[1], fwd[0]);
+    gl.uniform2f(scene.u.uPitchCS, Math.cos(state.pitch), Math.sin(state.pitch));
     gl.uniform1f(scene.u.uEye, 0.8 + 0.02 * Math.sin(state.bob));
     gl.uniform1f(scene.u.uTime, state.time);
     gl.uniform2i(scene.u.uOrigin, origin.x, origin.y);
@@ -407,11 +412,15 @@
       const wx = m.x, wy = m.y;
       m.lastW = [wx, wy];
       const rx = wx - state.pos.x, ry = wy - state.pos.y;
-      const z = rx * c + ry * s;                      // depth
+      // Same camera as the shader: forward/up tilted by pitch.
+      const cp = Math.cos(state.pitch), sp = Math.sin(state.pitch);
+      const zh = rx * c + ry * s, dh = m.h - eye;
+      const z = zh * cp + dh * sp;                    // depth along the view direction
       if (z < 0.3) continue;
       const lateral = -rx * s + ry * c;
+      const up = -zh * sp + dh * cp;
       const px = canvas.width / 2 + (lateral / (z * 1.3)) * canvas.height;
-      const py = canvas.height / 2 + ((m.h - eye) / (z * 1.3)) * canvas.height;
+      const py = canvas.height / 2 + (up / (z * 1.3)) * canvas.height;
       if (px < -50 || px > canvas.width + 50 || py < -50 || py > canvas.height + 50) continue;
       if (isWall(Math.floor(wx), Math.floor(wy)) || !lineOfSight(state.pos.x, state.pos.y, wx, wy)) continue;
       const near = Math.min(1, 1.2 / z);
@@ -482,7 +491,7 @@
   }
   function leave() {
     entered = false;
-    mouseX = -1;
+    mouseX = mouseY = -1;
     overlay.classList.remove('hidden');
   }
   overlay.addEventListener('click', enter);
@@ -493,16 +502,23 @@
     wasLocked = locked();
   });
   addEventListener('keydown', (e) => { if (e.code === 'Escape' && entered && !locked()) leave(); });
-  // Without pointer lock the cursor stops at the window edge, so resting it near the left or
-  // right edge keeps turning (faster the closer it is) — full 360 either way.
-  let mouseX = -1;
-  addEventListener('mousemove', (e) => { mouseX = e.clientX; if (entered) state.angle += e.movementX * 0.0025; });
-  document.addEventListener('mouseleave', () => { mouseX = -1; });
+  // Without pointer lock the cursor stops at the window edge, so resting it near an edge keeps
+  // turning or tilting (faster the closer it is) — full look-around either way.
+  const PITCH_MAX = 1.45;  // ~83 degrees: look at the ceiling/floor without flipping over
+  const addPitch = (d) => { state.pitch = Math.max(-PITCH_MAX, Math.min(PITCH_MAX, state.pitch + d)); };
+  let mouseX = -1, mouseY = -1;
+  addEventListener('mousemove', (e) => {
+    mouseX = e.clientX; mouseY = e.clientY;
+    if (entered) { state.angle += e.movementX * 0.0025; addPitch(-e.movementY * 0.0025); }
+  });
+  document.addEventListener('mouseleave', () => { mouseX = mouseY = -1; });
   function edgeTurn(dt) {
     if (!entered || locked() || mouseX < 0) return;
-    const zone = innerWidth * 0.12;
-    if (mouseX < zone) state.angle -= 2.4 * dt * (1 - mouseX / zone);
-    else if (mouseX > innerWidth - zone) state.angle += 2.4 * dt * (1 - (innerWidth - mouseX) / zone);
+    const zx = innerWidth * 0.12, zy = innerHeight * 0.12;
+    if (mouseX < zx) state.angle -= 2.4 * dt * (1 - mouseX / zx);
+    else if (mouseX > innerWidth - zx) state.angle += 2.4 * dt * (1 - (innerWidth - mouseX) / zx);
+    if (mouseY < zy) addPitch(1.6 * dt * (1 - mouseY / zy));
+    else if (mouseY > innerHeight - zy) addPitch(-1.6 * dt * (1 - (innerHeight - mouseY) / zy));
   }
   if (STILL) overlay.classList.add('hidden');
 
