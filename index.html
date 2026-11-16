@@ -240,6 +240,47 @@
     outColor = vec4(col * fog, 1.0);
   }`;
 
+  const BLUR_FS = `#version 300 es
+  precision highp float;
+  uniform sampler2D uSrc;
+  uniform vec2 uOutSize;  // destination size in px
+  uniform vec2 uDir;      // tap step in uv
+  uniform float uLod;     // source mip level (2 = quarter res for the first pass)
+  out vec4 outColor;
+  void main() {
+    vec2 uv = gl_FragCoord.xy / uOutSize;
+    float w[5] = float[](0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
+    vec4 acc = textureLod(uSrc, uv, uLod) * w[0];
+    for (int i = 1; i < 5; i++) {
+      acc += textureLod(uSrc, uv + uDir * float(i) * 1.5, uLod) * w[i];
+      acc += textureLod(uSrc, uv - uDir * float(i) * 1.5, uLod) * w[i];
+    }
+    outColor = acc;
+  }`;
+
+  const COMPOSITE_FS = `#version 300 es
+  precision highp float;
+  uniform sampler2D uScene, uBloom;
+  uniform vec2 uRes;
+  uniform float uBright;
+  uniform vec4 uMotes[40];   // xy = screen px, z = radius px, w = alpha
+  uniform int uMoteCount;
+  out vec4 outColor;
+  void main() {
+    vec2 uv = gl_FragCoord.xy / uRes;
+    vec3 col = texture(uScene, uv).rgb + texture(uBloom, uv).rgb * 1.4;
+    for (int i = 0; i < 40; i++) {
+      if (i >= uMoteCount) break;
+      vec4 m = uMotes[i];
+      float d = length(gl_FragCoord.xy - m.xy) / m.z;
+      col += vec3(0.55, 1.0, 0.65) * m.w * exp(-d * d * 2.0);
+    }
+    vec2 q = uv - 0.5;
+    col *= 1.0 - dot(q, q) * 0.6;   // gentle vignette
+    outColor = vec4(col * uBright, 1.0);
+  }`;
+
+
   function compile(type, src) {
     const s = gl.createShader(type);
     gl.shaderSource(s, src); gl.compileShader(s);
@@ -258,8 +299,8 @@
     return { p, u };
   }
 
-  let scene;
-  try { scene = program(SCENE_FS); } catch (err) {
+  let scene, blur, composite;
+  try { scene = program(SCENE_FS); blur = program(BLUR_FS); composite = program(COMPOSITE_FS); } catch (err) {
     overlay.classList.remove('hidden');
     overlay.innerHTML = '<pre style="white-space:pre-wrap;max-width:90vw">' + String(err.message).replace(/</g, '&lt;') + '</pre>';
     throw err;
@@ -290,6 +331,125 @@
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, mapTex); gl.uniform1i(scene.u.uMap, 0);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, atlasTex); gl.uniform1i(scene.u.uAtlas, 1);
     gl.bindVertexArray(vao);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+
+  // ---------- post: bloom, motes, flicker ----------
+  function makeTarget(w, h, mips) {
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, mips ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    return { tex, fbo, w, h };
+  }
+  function freeTarget(t) { if (t) { gl.deleteTexture(t.tex); gl.deleteFramebuffer(t.fbo); } }
+
+  let targets = null;
+  function ensureTargets() {
+    const w = canvas.width, h = canvas.height;
+    if (targets && targets.scene.w === w && targets.scene.h === h) return;
+    if (targets) Object.values(targets).forEach(freeTarget);
+    const bw = Math.max(1, w >> 2), bh = Math.max(1, h >> 2);
+    targets = { scene: makeTarget(w, h, true), a: makeTarget(bw, bh), b: makeTarget(bw, bh) };
+  }
+
+  function blurPass(src, dst, dx, dy, lod) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fbo);
+    gl.viewport(0, 0, dst.w, dst.h);
+    gl.useProgram(blur.p);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, src.tex);
+    gl.uniform1i(blur.u.uSrc, 0);
+    gl.uniform2f(blur.u.uOutSize, dst.w, dst.h);
+    gl.uniform2f(blur.u.uDir, dx / dst.w, dy / dst.h);
+    gl.uniform1f(blur.u.uLod, lod);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  // Motes: faint specks of light drifting in the air around the viewer.
+  const MOTES = 40, MOTE_R = 6;
+  const motes = Array.from({ length: MOTES }, () => ({
+    x: (Math.random() * 2 - 1) * MOTE_R, y: (Math.random() * 2 - 1) * MOTE_R, h: 0.1 + Math.random() * 1.5,
+    vx: (Math.random() - 0.5) * 0.08, vy: (Math.random() - 0.5) * 0.08, vh: (Math.random() - 0.5) * 0.04,
+    a: 0.25 + Math.random() * 0.35,
+  }));
+  const moteData = new Float32Array(MOTES * 4);
+  function lineOfSight(ax, ay, bx, by) {
+    const d = Math.hypot(bx - ax, by - ay), n = Math.ceil(d / 0.2);
+    for (let i = 1; i < n; i++) {
+      const t = i / n;
+      if (isWall(Math.floor(ax + (bx - ax) * t), Math.floor(ay + (by - ay) * t))) return false;
+    }
+    return true;
+  }
+  function updateMotes(dt) {
+    const c = Math.cos(state.angle), s = Math.sin(state.angle);
+    const eye = 0.8 + 0.02 * Math.sin(state.bob);
+    let n = 0;
+    for (const m of motes) {
+      m.x += m.vx * dt; m.y += m.vy * dt; m.h += m.vh * dt;
+      // Keep motes in a box around the viewer (relative coords wrap).
+      const wrap = (v) => ((v + MOTE_R) % (2 * MOTE_R) + 2 * MOTE_R) % (2 * MOTE_R) - MOTE_R;
+      m.x = wrap(m.x); m.y = wrap(m.y);
+      if (m.h < 0.05 || m.h > 1.65) m.vh = -m.vh;
+      const wx = Math.floor(state.pos.x) + m.x, wy = Math.floor(state.pos.y) + m.y;
+      const rx = wx - state.pos.x, ry = wy - state.pos.y;
+      const z = rx * c + ry * s;                      // depth
+      if (z < 0.3) continue;
+      const lateral = -rx * s + ry * c;
+      const px = canvas.width / 2 + (lateral / (z * 1.3)) * canvas.height;
+      const py = canvas.height / 2 + ((m.h - eye) / (z * 1.3)) * canvas.height;
+      if (px < -50 || px > canvas.width + 50 || py < -50 || py > canvas.height + 50) continue;
+      if (isWall(Math.floor(wx), Math.floor(wy)) || !lineOfSight(state.pos.x, state.pos.y, wx, wy)) continue;
+      const near = Math.min(1, 1.2 / z);
+      moteData[n * 4] = px; moteData[n * 4 + 1] = py;
+      moteData[n * 4 + 2] = canvas.height * (0.010 + 0.016 * (1 - near));  // far motes blur wider
+      moteData[n * 4 + 3] = m.a * Math.exp(-z * 0.15);
+      n++;
+    }
+    return n;
+  }
+
+  // Ambient flicker: every 8-20 s the light dips briefly.
+  let nextFlicker = state.time + 8 + Math.random() * 12, dipUntil = -1;
+  function brightness() {
+    if (STILL) return 1;
+    if (state.time >= nextFlicker) {
+      dipUntil = state.time + 0.08 + Math.random() * 0.12;
+      nextFlicker = state.time + 8 + Math.random() * 12;
+    }
+    return state.time < dipUntil ? 0.75 : 1;
+  }
+
+  function render(dt) {
+    ensureTargets();
+    renderScene(targets.scene.fbo);
+    // Downsample + blur (two rounds for a wide, soft glow).
+    gl.bindTexture(gl.TEXTURE_2D, targets.scene.tex);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    blurPass(targets.scene, targets.a, 1, 0, 2);
+    blurPass(targets.a, targets.b, 0, 1, 0);
+    blurPass(targets.b, targets.a, 2, 0, 0);
+    blurPass(targets.a, targets.b, 0, 2, 0);
+    const n = updateMotes(dt);
+    if (STILL) document.body.dataset.motes = n;  // test hook
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.useProgram(composite.p);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, targets.scene.tex);
+    gl.uniform1i(composite.u.uScene, 0);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, targets.b.tex);
+    gl.uniform1i(composite.u.uBloom, 1);
+    gl.uniform2f(composite.u.uRes, canvas.width, canvas.height);
+    gl.uniform1f(composite.u.uBright, brightness());
+    gl.uniform4fv(composite.u['uMotes[0]'], moteData);
+    gl.uniform1i(composite.u.uMoteCount, n);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
@@ -330,12 +490,12 @@
     last = now;
     if (!STILL) { state.time += dt; update(dt); recentre(false); }
     resize();
-    renderScene(null);
+    render(STILL ? 0 : dt);
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
 
-  window.LR = { state, renderScene, resize, gl, canvas };
+  window.LR = { state, renderScene, render, resize, gl, canvas };
 })();
 </script>
 </body>
