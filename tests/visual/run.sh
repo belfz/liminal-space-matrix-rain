@@ -37,5 +37,8 @@ a,b=json.loads(sys.argv[1]),json.loads(sys.argv[2])
 ok=all(min(abs(p[k]-q[k]), abs(abs(p[k]-q[k])-12)) < 1e-3 for p,q in zip(a,b) for k in (0,1))
 sys.exit(0 if ok and len(a)==len(b)>0 else 1)" "$A" "$B"; then echo "ok   motes world-stable"; else echo "FAIL motes world-stable"; fail=1; fi
 
+# 4. Mouse look works after "click to enter" even when pointer lock is refused.
+node tests/visual/mouse-look.mjs "file://$PWD/index.html" || fail=1
+
 rm -rf "$T"
 exit $fail

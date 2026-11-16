@@ -468,10 +468,31 @@
   addEventListener('keydown', (e) => { keys.add(e.code); if (e.code.startsWith('Arrow')) e.preventDefault(); });
   addEventListener('keyup', (e) => keys.delete(e.code));
   addEventListener('blur', () => keys.clear());
+  // Clicking always enters. Pointer lock is an enhancement: browsers refuse it in embedded or
+  // sandboxed views and briefly after Esc, so without it plain mouse movement still turns the view.
   const locked = () => document.pointerLockElement === canvas;
-  overlay.addEventListener('click', () => canvas.requestPointerLock && canvas.requestPointerLock());
-  document.addEventListener('pointerlockchange', () => overlay.classList.toggle('hidden', locked()));
-  addEventListener('mousemove', (e) => { if (locked()) state.angle += e.movementX * 0.0025; });
+  let entered = false;
+  function enter() {
+    entered = true;
+    overlay.classList.add('hidden');
+    try {
+      const r = canvas.requestPointerLock && canvas.requestPointerLock();
+      if (r && r.catch) r.catch(() => {});   // refused: stay in unlocked mouse-look mode
+    } catch (_) { /* same */ }
+  }
+  function leave() {
+    entered = false;
+    overlay.classList.remove('hidden');
+  }
+  overlay.addEventListener('click', enter);
+  document.addEventListener('pointerlockerror', () => {});
+  let wasLocked = false;
+  document.addEventListener('pointerlockchange', () => {
+    if (wasLocked && !locked()) leave();       // Esc released the lock
+    wasLocked = locked();
+  });
+  addEventListener('keydown', (e) => { if (e.code === 'Escape' && entered && !locked()) leave(); });
+  addEventListener('mousemove', (e) => { if (entered) state.angle += e.movementX * 0.0025; });
   if (STILL) overlay.classList.add('hidden');
 
   const isWall = (tx, ty) => World.tileAt(tx, ty, seed) === 1;
