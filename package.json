@@ -1,0 +1,6 @@
+{
+  "name": "liminal-rain",
+  "private": true,
+  "type": "commonjs",
+  "scripts": { "test": "node --test" }
+}
