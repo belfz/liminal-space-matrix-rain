@@ -63,5 +63,9 @@ tools/shot.sh "$Q&t=10&text=0" "$T/n1.png" 960,540
 set -- $(python3 tests/visual/maskdiff.py "$T/t1.png" "$T/t2.png" "$T/n1.png")
 if python3 -c "import sys; sys.exit(0 if $1 > 800 and $2 < 0.05 else 1)"; then echo "ok   wall text constant (block $1 px, changed $2)"; else echo "FAIL wall text constant (block $1 px, changed $2)"; fail=1; fi
 
+# 7. Starts after an update even if the browser cached the old src/world.js (preview servers
+#    send max-age=3600). 73dc27a = last commit before world.js gained wall text.
+node tests/visual/stale-cache.mjs 73dc27a || fail=1
+
 rm -rf "$T"
 exit $fail

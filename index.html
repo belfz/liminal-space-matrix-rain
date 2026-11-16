@@ -36,10 +36,19 @@
   </div>
   <div class="hint">WASD / arrows to move &middot; mouse to look &middot; esc to leave</div>
 </div>
-<script src="src/world.js"></script>
 <script>
 'use strict';
-(() => {
+// Any startup failure shows on the welcome screen instead of leaving it silently stuck.
+function showFatal(text) {
+  const o = document.getElementById('overlay');
+  o.classList.remove('hidden');
+  o.innerHTML = '<div class="title">LIMINAL RAIN</div><div>something went wrong while starting</div>' +
+    '<pre style="white-space:pre-wrap;max-width:80vw;opacity:0.8">' + String(text).replace(/</g, '&lt;') + '</pre>' +
+    '<div class="hint">try a hard reload (Cmd/Ctrl + Shift + R)</div>';
+}
+window.addEventListener('error', (e) => { if (!window.LR) showFatal(e.message || e); });
+
+function startGame() {
   const params = new URLSearchParams(location.search);
   const num = (k, d) => (params.has(k) ? Number(params.get(k)) : d);
   const STILL = params.get('still') === '1';
@@ -683,6 +692,16 @@
   requestAnimationFrame(frame);
 
   window.LR = { state, settings, renderScene, render, resize, gl, canvas };
+}
+
+// Load the world logic with a fresh URL every time: some servers (e.g. T3 Code's preview) let the
+// browser cache files for an hour, and a normal reload would pair a new page with an old world.js.
+(() => {
+  const s = document.createElement('script');
+  s.src = 'src/world.js?v=' + Date.now();
+  s.onload = startGame;
+  s.onerror = () => showFatal('could not load src/world.js');
+  document.head.appendChild(s);
 })();
 </script>
 </body>
