@@ -73,22 +73,20 @@
   const WIN = 64; // map window size in tiles
 
   // ---------- glyph atlas ----------
-  function buildAtlas() {
-    const N = 16, S = 64;
+  // Glyphs on a cols x rows grid of 64px cells, white on black, optionally mirrored (rain is).
+  function glyphAtlas(chars, cols, rows, font, mirrored) {
+    const S = 64;
     const c = document.createElement('canvas');
-    c.width = c.height = N * S;
+    c.width = cols * S; c.height = rows * S;
     const g = c.getContext('2d');
     g.fillStyle = '#000'; g.fillRect(0, 0, c.width, c.height);
-    const chars = [];
-    for (let k = 0xff66; k <= 0xff9d; k++) chars.push(String.fromCharCode(k)); // half-width katakana
-    chars.push(...'0123456789:・."=*+-<>¦|ZTJ'.split(''));
     g.fillStyle = '#fff';
     g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.font = `${Math.floor(S * 0.78)}px "Hiragino Sans", "Hiragino Kaku Gothic ProN", "MS Gothic", "Noto Sans JP", monospace`;
-    for (let i = 0; i < N * N; i++) {
+    g.font = font(S);
+    for (let i = 0; i < cols * rows; i++) {
       const ch = chars[i % chars.length];
-      const x = (i % N) * S + S / 2, y = Math.floor(i / N) * S + S / 2;
-      g.save(); g.translate(x, y); g.scale(-1, 1); g.fillText(ch, 0, 0); g.restore();
+      const x = (i % cols) * S + S / 2, y = Math.floor(i / cols) * S + S / 2;
+      g.save(); g.translate(x, y); if (mirrored) g.scale(-1, 1); g.fillText(ch, 0, 0); g.restore();
     }
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -100,6 +98,52 @@
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     return tex;
   }
+  function buildAtlas() {
+    const chars = [];
+    for (let k = 0xff66; k <= 0xff9d; k++) chars.push(String.fromCharCode(k)); // half-width katakana
+    chars.push(...'0123456789:・."=*+-<>¦|ZTJ'.split(''));
+    return glyphAtlas(chars, 16, 16,
+      (S) => `${Math.floor(S * 0.78)}px "Hiragino Sans", "Hiragino Kaku Gothic ProN", "MS Gothic", "Noto Sans JP", monospace`, true);
+  }
+  // Wall text: printable ASCII 32..126 on a 16x6 grid, not mirrored.
+  function buildTextAtlas() {
+    const chars = [];
+    for (let k = 32; k < 128; k++) chars.push(String.fromCharCode(k));
+    return glyphAtlas(chars, 16, 6, (S) => `${Math.floor(S * 0.82)}px Menlo, "DejaVu Sans Mono", Consolas, monospace`, false);
+  }
+
+  // ---------- wall text data ----------
+  // Phrases, word-wrapped for the current density: row (p*4 + line), column = char (ASCII code).
+  // Column 46 of a phrase's first row holds its longest line, column 47 its line count.
+  const TEXT_ON = params.get('text') !== '0';
+  const PH_W = 48;
+  const phraseData = new Uint8Array(PH_W * World.PHRASES.length * 4);
+  const phraseTex = gl.createTexture();
+  let phraseDensity = 0;
+  function buildPhrases(density) {
+    if (density === phraseDensity) return;
+    phraseDensity = density;
+    const width = 15 * density - 2;  // leave a one-cell margin each side within a tile face
+    phraseData.fill(0);
+    World.PHRASES.forEach((text, p) => {
+      const lines = World.wrapText(text, width);
+      lines.forEach((line, l) => { for (let i = 0; i < line.length; i++) phraseData[(p * 4 + l) * PH_W + i] = line.charCodeAt(i); });
+      phraseData[p * 4 * PH_W + 46] = Math.max(...lines.map((l) => l.length));
+      phraseData[p * 4 * PH_W + 47] = lines.length;
+    });
+    gl.bindTexture(gl.TEXTURE_2D, phraseTex);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, PH_W, World.PHRASES.length * 4, 0, gl.RED, gl.UNSIGNED_BYTE, phraseData);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  }
+  // Which face of each wall tile in the map window carries which phrase (RGBA = faces +x,-x,+y,-y).
+  const faceData = new Uint8Array(WIN * WIN * 4);
+  const faceTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, faceTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, WIN, WIN, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
   // ---------- map window ----------
   const mapData = new Uint8Array(WIN * WIN);
@@ -119,6 +163,9 @@
     World.fillWindow(origin.x, origin.y, WIN, seed, mapData);
     gl.bindTexture(gl.TEXTURE_2D, mapTex);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, WIN, WIN, gl.RED, gl.UNSIGNED_BYTE, mapData);
+    World.fillTextWindow(origin.x, origin.y, WIN, seed, faceData);
+    gl.bindTexture(gl.TEXTURE_2D, faceTex);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, WIN, WIN, gl.RGBA, gl.UNSIGNED_BYTE, faceData);
   }
 
   // ---------- shaders ----------
@@ -140,6 +187,8 @@
   uniform int uDens;       // glyph density: cells per tile scale by this (1, 2, 3)
   uniform ivec2 uOrigin;   // window origin in world tiles
   uniform sampler2D uMap, uAtlas;
+  uniform sampler2D uFaceText, uPhrases, uTextAtlas;
+  uniform int uTextOn;
   out vec4 outColor;
 
   const float K = 1.3;
@@ -147,6 +196,41 @@
   const int WIN = ${WIN};
   const vec3 GREEN = vec3(0.0, 1.0, 0.255);
   const vec3 HEAD  = vec3(0.85, 1.0, 0.88);
+  const vec3 TEXT  = vec3(0.45, 1.0, 0.55);
+
+  int byteAt(sampler2D t, ivec2 p) { return int(texelFetch(t, p, 0).r * 255.0 + 0.5); }
+
+  // Wall text: returns true if this wall cell belongs to a text block (rain cleared there);
+  // col gets the steady text glyph, if any. tile = wall tile (window coords), tface = face 0..3,
+  // rnd = per-face random in [0,1), lc = column within the tile face, row = row from top.
+  bool wallText(ivec2 tile, int tface, float rnd, int lc, int row, vec2 g, out vec3 col) {
+    col = vec3(0.0);
+    if (uTextOn == 0) return false;
+    int tv = int(texelFetch(uFaceText, tile, 0)[tface] * 255.0 + 0.5);
+    if (tv == 0) return false;
+    int ph = tv - 1;
+    int len = byteAt(uPhrases, ivec2(46, ph * 4));
+    int lines = byteAt(uPhrases, ivec2(47, ph * 4));
+    int cpt = 15 * uDens;
+    int rows = int(WALL_H * 11.0 * float(uDens));
+    int r0 = int((0.30 + 0.22 * rnd) * float(rows));  // around eye height
+    int lr = row - r0, lcc = lc - (cpt - len) / 2;
+    if (lr < -1 || lr > lines || lcc < -1 || lcc > len) return false;
+    if (lr >= 0 && lr < lines && lcc >= 0 && lcc < len) {
+      int code = byteAt(uPhrases, ivec2(lcc, ph * 4 + lr));
+      if (code > 32) {
+        int gi = code - 32;
+        vec2 cell = vec2(float(gi % 16), float(gi / 16));
+        vec2 sc = vec2(0.88) / vec2(16.0, 6.0);
+        vec2 auv = (cell + 0.06) / vec2(16.0, 6.0) + fract(g) * sc;
+        float glyph = textureGrad(uTextAtlas, auv, dFdx(g) * sc, dFdy(g) * sc).r;
+        float fw = max(length(dFdx(g)), length(dFdy(g)));
+        glyph = mix(glyph, 0.3, smoothstep(0.35, 1.2, fw));
+        col = TEXT * glyph * 1.25;
+      }
+    }
+    return true;
+  }
 
   uint hu(uint x) { x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16; return x; }
   uint h3(int a, int b, int c) { return hu(uint(a) ^ hu(uint(b) ^ hu(uint(c) + 0x9e3779b9u))); }
@@ -239,7 +323,12 @@
       float fu = fract(u);
       float accent = max(1.0 - smoothstep(0.0, 0.07, min(fu, 1.0 - fu)),
                          1.0 - smoothstep(0.0, 0.05, min(hWall, WALL_H - hWall)));
-      col = rain(g, ci, plane * 4 + face, accent);
+      int tface = side == 0 ? (st.x > 0 ? 1 : 0) : (st.y > 0 ? 3 : 2);  // face hit: +x,-x,+y,-y
+      int tileAlong = int(floor(u)) + uo;
+      int lc = int(floor(g.x)) - int(floor(u)) * 15 * uDens;
+      vec3 tcol;
+      if (wallText(m, tface, hf(h3(plane, face, tileAlong)), lc, ci.y, g, tcol)) col = tcol;
+      else col = rain(g, ci, plane * 4 + face, accent);
     } else if (vy < 0.0 || vy > 0.0) {
       // --- floor / ceiling ---
       bool floorHit = vy < 0.0;
@@ -337,6 +426,7 @@
     throw err;
   }
   const atlasTex = buildAtlas();
+  const textAtlasTex = buildTextAtlas();
   const vao = gl.createVertexArray();
 
   // ---------- sizing ----------
@@ -360,6 +450,11 @@
     gl.uniform1f(scene.u.uEye, 0.8 + 0.02 * Math.sin(state.bob));
     gl.uniform1f(scene.u.uTime, state.time);
     gl.uniform1i(scene.u.uDens, settings.density);
+    buildPhrases(settings.density);
+    gl.uniform1i(scene.u.uTextOn, TEXT_ON ? 1 : 0);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, faceTex); gl.uniform1i(scene.u.uFaceText, 2);
+    gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, phraseTex); gl.uniform1i(scene.u.uPhrases, 3);
+    gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, textAtlasTex); gl.uniform1i(scene.u.uTextAtlas, 4);
     gl.uniform2i(scene.u.uOrigin, origin.x, origin.y);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, mapTex); gl.uniform1i(scene.u.uMap, 0);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, atlasTex); gl.uniform1i(scene.u.uAtlas, 1);

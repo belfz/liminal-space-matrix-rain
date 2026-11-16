@@ -130,3 +130,50 @@ test('free move', () => {
   const p = moveWithCollision({ x: 4.5, y: 0.5 }, 2.25, -1.5, R, () => false);
   assert.ok(Math.abs(p.x - 6.75) < 1e-9 && Math.abs(p.y + 1) < 1e-9, `${p.x},${p.y}`);
 });
+
+const { PHRASES, wallText, wrapText, fillTextWindow } = World;
+// Faces: 0 = +x (east), 1 = -x (west), 2 = +y (south), 3 = -y (north) — the side the text is on.
+const FACE_DIR = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+test('phrases are printable ASCII fragments', () => {
+  assert.ok(PHRASES.length >= 30);
+  for (const p of PHRASES) {
+    assert.match(p, /^[\x20-\x7e]+$/, p);
+    assert.ok(p.length >= 2 && p.length <= 40, p);
+  }
+});
+
+test('wallText only on exposed wall faces, deterministic, ~10% of them', () => {
+  let exposed = 0, withText = 0;
+  for (let y = -200; y < 200; y++) for (let x = -200; x < 200; x++) for (let f = 0; f < 4; f++) {
+    const t = wallText(x, y, f, 5);
+    assert.equal(t, wallText(x, y, f, 5));
+    const [dx, dy] = FACE_DIR[f];
+    const isExposed = tileAt(x, y, 5) === 1 && tileAt(x + dx, y + dy, 5) === 0;
+    if (!isExposed) { assert.equal(t, -1, `${x},${y},${f}`); continue; }
+    exposed++;
+    if (t >= 0) { withText++; assert.ok(Number.isInteger(t) && t < PHRASES.length); }
+  }
+  const frac = withText / exposed;
+  assert.ok(frac > 0.06 && frac < 0.14, `fraction ${frac}`);
+});
+
+test('wrapText wraps at word boundaries to the width, max 4 lines', () => {
+  assert.deepEqual(wrapText('the exit was just', 9), ['the exit', 'was just']);
+  assert.deepEqual(wrapText('wake up', 13), ['wake up']);
+  for (const p of PHRASES) for (const w of [13, 28, 43]) {
+    const lines = wrapText(p, w);
+    assert.ok(lines.length >= 1 && lines.length <= 4, `${p} @${w}`);
+    for (const l of lines) assert.ok(l.length <= w, `${l} @${w}`);
+    assert.equal(lines.join(' '), p, `words lost: ${p} @${w}`);
+  }
+  // A word longer than the width is cut, not dropped.
+  assert.deepEqual(wrapText('abcdefghij', 4), ['abcd', 'efgh', 'ij']);
+});
+
+test('fillTextWindow matches wallText', () => {
+  const size = 16, out = new Uint8Array(size * size * 4);
+  fillTextWindow(-7, 9, size, 5, out);
+  for (let j = 0; j < size; j++) for (let i = 0; i < size; i++) for (let f = 0; f < 4; f++)
+    assert.equal(out[(j * size + i) * 4 + f], wallText(-7 + i, 9 + j, f, 5) + 1);
+});

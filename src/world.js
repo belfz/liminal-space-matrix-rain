@@ -146,7 +146,87 @@
     return { x, y };
   }
 
-  const World = { CHUNK, hash2, chunkKind, tileAt, findSpawn, fillWindow, moveWithCollision };
+  // ---------- wall text ----------
+  // Fragments written into the code on some walls. Printable ASCII, <= 40 chars.
+  const PHRASES = [
+    'you have been here before',
+    'the exit was just',
+    'we were told to wait',
+    'it is always 3:14 am here',
+    'do you remember the way back',
+    'the lights hum but',
+    'keep walking. the end is',
+    'someone left the door',
+    'you are not lost, you are',
+    'it was louder yesterday',
+    'there is no other side',
+    'the floor continues',
+    'wake up',
+    'you were here at',
+    'this is not the same room',
+    'how long have you',
+    'the hallway remembers',
+    'all exits lead to',
+    'no signal',
+    'is anyone',
+    'turn back',
+    'count the doors',
+    'you already passed this',
+    'the static is almost a voice',
+    'left, then left, then left',
+    'it smells like rain',
+    'almost',
+    'they took out the windows',
+    'between floors',
+    'do not trust the corners',
+    'the clock stopped when',
+    'every room is the',
+    'you said you would come',
+    'nothing is loading',
+    'the walls are still',
+    'we kept the lights on for',
+    'if you can read this',
+    'not yet',
+    'the last person here',
+    'it goes on like this',
+  ];
+  const FACE_DIR = [[1, 0], [-1, 0], [0, 1], [0, -1]]; // face 0..3: +x, -x, +y, -y
+
+  // Phrase index on face `face` of wall tile (x, y), or -1. Only faces that look onto a floor tile.
+  function wallText(x, y, face, seed) {
+    if (tileAt(x, y, seed) !== 1) return -1;
+    const [dx, dy] = FACE_DIR[face];
+    if (tileAt(x + dx, y + dy, seed) !== 0) return -1;
+    if (h4(x, y, seed, 0x7e00 + face) >= 0.1) return -1;
+    return Math.floor(h4(x, y, seed, 0x7e10 + face) * PHRASES.length);
+  }
+
+  // Greedy word wrap to `width` chars, at most 4 lines; over-long words are cut.
+  function wrapText(text, width) {
+    const lines = [];
+    let line = '';
+    for (let word of text.split(' ')) {
+      while (word.length > width) {
+        if (line) { lines.push(line); line = ''; }
+        lines.push(word.slice(0, width)); word = word.slice(width);
+      }
+      if (!line) line = word;
+      else if (line.length + 1 + word.length <= width) line += ' ' + word;
+      else { lines.push(line); line = word; }
+    }
+    if (line) lines.push(line);
+    return lines.slice(0, 4);
+  }
+
+  // out[(j*size+i)*4 + face] = phrase index + 1 (0 = no text) for each tile in the window.
+  function fillTextWindow(ox, oy, size, seed, out) {
+    for (let j = 0; j < size; j++) for (let i = 0; i < size; i++) for (let f = 0; f < 4; f++)
+      out[(j * size + i) * 4 + f] = wallText(ox + i, oy + j, f, seed) + 1;
+    return out;
+  }
+
+  const World = { CHUNK, hash2, chunkKind, tileAt, findSpawn, fillWindow, moveWithCollision,
+    PHRASES, wallText, wrapText, fillTextWindow };
   if (typeof module !== 'undefined') module.exports = World;
   else window.World = World;
 })();

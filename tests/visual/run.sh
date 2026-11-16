@@ -48,5 +48,20 @@ P1=$(python3 tests/visual/colperiod.py "$T/d1.png"); P2=$(python3 tests/visual/c
 if python3 -c "import sys; r = $P1 / max($P2, 1); sys.exit(0 if $P2 > 0 and 1.7 <= r <= 2.3 else 1)"; then echo "ok   density 2x halves column spacing ($P1 px -> $P2 px)"; else echo "FAIL density 2x halves column spacing ($P1 px -> $P2 px)"; fail=1; fi
 node tests/visual/menu.mjs "file://$PWD/index.html" || fail=1
 
+# 6. Wall text is constant: facing a text face, the text block (where text-on differs from
+#    text-off) stays the same over time while the rain around it moves.
+POSE=$(node -e "
+const W=require('./src/world.js'); const D=[[1,0],[-1,0],[0,1],[0,-1]];
+for (let y=0;y<200;y++) for (let x=0;x<200;x++) for (let f=0;f<4;f++) {
+  if (W.wallText(x,y,f,1)<0) continue; const [dx,dy]=D[f];
+  if (W.tileAt(x+2*dx,y+2*dy,1)||W.tileAt(x+3*dx,y+3*dy,1)) continue;
+  console.log('x='+(x+0.5+dx*2.2)+'&y='+(y+0.5+dy*2.2)+'&a='+Math.atan2(-dy,-dx)); process.exit(); }")
+Q="seed=1&still=1&$POSE"
+TEXT_PARAM="${TEXT_PARAM:-}"   # set TEXT_PARAM='&text=0' to see this check fail
+tools/shot.sh "$Q&t=10$TEXT_PARAM" "$T/t1.png" 960,540; tools/shot.sh "$Q&t=10.7$TEXT_PARAM" "$T/t2.png" 960,540
+tools/shot.sh "$Q&t=10&text=0" "$T/n1.png" 960,540
+set -- $(python3 tests/visual/maskdiff.py "$T/t1.png" "$T/t2.png" "$T/n1.png")
+if python3 -c "import sys; sys.exit(0 if $1 > 800 and $2 < 0.05 else 1)"; then echo "ok   wall text constant (block $1 px, changed $2)"; else echo "FAIL wall text constant (block $1 px, changed $2)"; fail=1; fi
+
 rm -rf "$T"
 exit $fail
