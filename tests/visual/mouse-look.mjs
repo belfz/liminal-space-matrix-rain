@@ -36,8 +36,16 @@ try {
   for (let i = 1; i <= 10; i++) { await mouse('mouseMoved', 400 + i * 20, 225); await sleep(30); }
   await sleep(200);
   const a1 = await ev('LR.state.angle');
-  ok = hidden && a1 > a0 + 0.1 && errors.length === 0;
-  msg = `overlay hidden=${hidden} angle ${a0} -> ${a1} uncaught=${JSON.stringify(errors)}`;
+  // Full 360 without pointer lock: resting the cursor at the right edge keeps turning.
+  await mouse('mouseMoved', 795, 225); await sleep(100);
+  const e0 = await ev('LR.state.angle'); await sleep(1000);
+  const e1 = await ev('LR.state.angle');
+  // ...and resting in the middle does not.
+  await mouse('mouseMoved', 400, 225); await sleep(100);
+  const m0 = await ev('LR.state.angle'); await sleep(500);
+  const m1 = await ev('LR.state.angle');
+  ok = hidden && a1 > a0 + 0.1 && e1 > e0 + 0.5 && Math.abs(m1 - m0) < 1e-9 && errors.length === 0;
+  msg = `overlay hidden=${hidden} drag ${a0}->${a1} edge ${e0}->${e1} centre ${m0}->${m1} uncaught=${JSON.stringify(errors)}`;
   ws.close();
 } catch (e) { msg = String(e); }
 chrome.kill(); await sleep(200); rmSync(profile, { recursive: true, force: true });

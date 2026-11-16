@@ -9,8 +9,10 @@ goal, only the space.
 
 **Run:** open `index.html` in a browser (no server, no build). Click to enter.
 
-**Controls:** `WASD` / arrow keys to move · mouse to look · `Esc` to release the mouse.
-Without pointer lock, left/right arrows turn.
+**Controls:** `WASD` / arrow keys to move · mouse to look · `Esc` to leave.
+Where the browser grants pointer lock the mouse turns freely. Where it doesn't (e.g. embedded
+previews), mouse movement still turns and resting the cursor near the left/right edge keeps
+turning. Without pointer lock, the left/right arrows turn too.
 
 **URL params:** `seed=N` picks a different world; `x`, `y`, `a` (angle, radians), `t` (time)
 set the start; `still=1` freezes time and input (used for screenshots).

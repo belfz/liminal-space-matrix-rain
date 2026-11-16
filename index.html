@@ -482,6 +482,7 @@
   }
   function leave() {
     entered = false;
+    mouseX = -1;
     overlay.classList.remove('hidden');
   }
   overlay.addEventListener('click', enter);
@@ -492,7 +493,17 @@
     wasLocked = locked();
   });
   addEventListener('keydown', (e) => { if (e.code === 'Escape' && entered && !locked()) leave(); });
-  addEventListener('mousemove', (e) => { if (entered) state.angle += e.movementX * 0.0025; });
+  // Without pointer lock the cursor stops at the window edge, so resting it near the left or
+  // right edge keeps turning (faster the closer it is) — full 360 either way.
+  let mouseX = -1;
+  addEventListener('mousemove', (e) => { mouseX = e.clientX; if (entered) state.angle += e.movementX * 0.0025; });
+  document.addEventListener('mouseleave', () => { mouseX = -1; });
+  function edgeTurn(dt) {
+    if (!entered || locked() || mouseX < 0) return;
+    const zone = innerWidth * 0.12;
+    if (mouseX < zone) state.angle -= 2.4 * dt * (1 - mouseX / zone);
+    else if (mouseX > innerWidth - zone) state.angle += 2.4 * dt * (1 - (innerWidth - mouseX) / zone);
+  }
   if (STILL) overlay.classList.add('hidden');
 
   const isWall = (tx, ty) => World.tileAt(tx, ty, seed) === 1;
@@ -502,6 +513,7 @@
     const strafe = (k('KeyD') ? 1 : 0) - (k('KeyA') ? 1 : 0)
       + (locked() ? (k('ArrowRight') ? 1 : 0) - (k('ArrowLeft') ? 1 : 0) : 0);
     if (!locked()) state.angle += ((k('ArrowRight') ? 1 : 0) - (k('ArrowLeft') ? 1 : 0)) * 2.2 * dt;
+    edgeTurn(dt);
     const c = Math.cos(state.angle), s = Math.sin(state.angle);
     let dx = c * fwdIn - s * strafe, dy = s * fwdIn + c * strafe;
     const len = Math.hypot(dx, dy);
