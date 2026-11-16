@@ -106,3 +106,27 @@ test('fillWindow matches tileAt', () => {
   for (let j = 0; j < size; j++) for (let i = 0; i < size; i++)
     assert.equal(out[j * size + i], tileAt(-5 + i, 3 + j, 11) ? 255 : 0);
 });
+
+const { moveWithCollision } = World;
+const R = 0.2;
+
+test('blocked by wall', () => {
+  const p = moveWithCollision({ x: 4.5, y: 0.5 }, 3, 0, R, (tx) => tx >= 5);
+  assert.ok(p.x <= 5 - R + 1e-9, `x=${p.x}`);
+});
+
+test('slides along wall', () => {
+  const p = moveWithCollision({ x: 4.5, y: 0.5 }, 1, 1, R, (tx) => tx >= 5);
+  assert.ok(Math.abs(p.y - 1.5) < 1e-9, `y=${p.y}`);
+  assert.ok(p.x <= 4.8 + 1e-9, `x=${p.x}`);
+});
+
+test('no tunnelling', () => {
+  const p = moveWithCollision({ x: 4.5, y: 0.5 }, 50, 0, R, (tx) => tx === 5);
+  assert.ok(p.x < 5, `x=${p.x}`);
+});
+
+test('free move', () => {
+  const p = moveWithCollision({ x: 4.5, y: 0.5 }, 2.25, -1.5, R, () => false);
+  assert.ok(Math.abs(p.x - 6.75) < 1e-9 && Math.abs(p.y + 1) < 1e-9, `${p.x},${p.y}`);
+});

@@ -116,7 +116,37 @@
     return out;
   }
 
-  const World = { CHUNK, hash2, chunkKind, tileAt, findSpawn, fillWindow };
+  // Does a square of half-size r centred at (x, y) overlap any wall tile?
+  function hits(x, y, r, isWall) {
+    for (let ty = Math.floor(y - r); ty <= Math.floor(y + r); ty++)
+      for (let tx = Math.floor(x - r); tx <= Math.floor(x + r); tx++)
+        if (isWall(tx, ty)) return true;
+    return false;
+  }
+
+  // Move pos by (dx, dy), sliding along walls. Substeps keep each step <= 0.1 tiles
+  // so large deltas (frame hitches) can't tunnel through thin walls.
+  function moveWithCollision(pos, dx, dy, radius, isWall) {
+    const EPS = 1e-6;
+    const steps = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / 0.1));
+    const sx = dx / steps, sy = dy / steps;
+    let x = pos.x, y = pos.y;
+    for (let i = 0; i < steps; i++) {
+      if (sx !== 0) {
+        const nx = x + sx;
+        if (!hits(nx, y, radius, isWall)) x = nx;
+        else x = sx > 0 ? Math.floor(nx + radius) - radius - EPS : Math.floor(nx - radius) + 1 + radius + EPS;
+      }
+      if (sy !== 0) {
+        const ny = y + sy;
+        if (!hits(x, ny, radius, isWall)) y = ny;
+        else y = sy > 0 ? Math.floor(ny + radius) - radius - EPS : Math.floor(ny - radius) + 1 + radius + EPS;
+      }
+    }
+    return { x, y };
+  }
+
+  const World = { CHUNK, hash2, chunkKind, tileAt, findSpawn, fillWindow, moveWithCollision };
   if (typeof module !== 'undefined') module.exports = World;
   else window.World = World;
 })();
