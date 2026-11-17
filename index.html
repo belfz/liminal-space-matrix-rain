@@ -204,6 +204,12 @@ function startGame() {
   uniform sampler2D uMap, uAtlas;
   uniform sampler2D uFaceText, uPhrases, uTextAtlas;
   uniform int uTextOn;
+  // Opening cutscene hands: uHands = opacity (0 = off, skipped entirely). Body space is the
+  // player's yaw-only frame in metres (x right, y up, z forward, eye at the origin); hand 1 lives
+  // in x-mirrored body space. uHandM maps (mirrored) body space to hand-local, uHandP = palm centre.
+  uniform float uHands;
+  uniform mat3 uHandM[2];
+  uniform vec3 uHandP[2];
   out vec4 outColor;
 
   const float K = 1.3;
@@ -261,7 +267,7 @@ function startGame() {
   // Rain on a surface. g = continuous cell coords (x = column, y = along flow),
   // ci = integer cell index (world-stable), key = surface id.
   // Returns rgb.
-  vec3 rain(vec2 g, ivec2 ci, int key, float accent) {
+  vec3 rain(vec2 g, ivec2 ci, int key, float accent, vec3 trailCol, vec3 headCol) {
     int col = ci.x;
     float trail = 0.0, head = 0.0;
     float D = float(uDens);
@@ -295,7 +301,80 @@ function startGame() {
     glyph = mix(glyph, 0.32, smoothstep(0.35, 1.2, fw));
     float base = mix(0.10, 0.30, hf(hu(hcell + 7u))) * (1.0 + accent * 1.4);
     float b = glyph * (base + trail * (1.15 + accent * 0.5));
-    return mix(GREEN * b, HEAD * glyph * 1.4, head * (1.0 - smoothstep(0.6, 1.4, fw) * 0.6));
+    return mix(trailCol * b, headCol * glyph * 1.4, head * (1.0 - smoothstep(0.6, 1.4, fw) * 0.6));
+  }
+
+  // ---------- golden hands (opening cutscene) ----------
+  const vec3 GOLD = vec3(1.0, 0.72, 0.25);
+  const vec3 GOLD_HEAD = vec3(1.0, 0.95, 0.78);
+  float smin(float a, float b, float k) { float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0); return mix(b, a, h) - k * h * (1.0 - h); }
+  float sdCapsule(vec3 p, vec3 a, vec3 b, float ra, float rb) {
+    vec3 pa = p - a, ba = b - a;
+    float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+    return length(pa - ba * h) - mix(ra, rb, h);
+  }
+  float sdRoundBox(vec3 p, vec3 b, float r) { vec3 q = abs(p) - b + r; return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0) - r; }
+  // Direction with splay s (towards +x) and lift a (towards +y, the palm side).
+  vec3 fdir(float s, float a) { return vec3(sin(s) * cos(a), sin(a), cos(s) * cos(a)); }
+  // A right hand, palm up, in hand-local metres: x across the palm (thumb +x), y out of the palm,
+  // z towards the fingertips. Fingers slightly spread and curled; the forearm runs back along -z.
+  float handSDF(vec3 p) {
+    float d = sdRoundBox(p, vec3(0.040, 0.011, 0.047), 0.011);
+    d = smin(d, sdCapsule(p, vec3(0.0, -0.004, -0.04), vec3(0.0, -0.02, -0.34), 0.027, 0.036), 0.02);
+    for (int i = 0; i < 4; i++) {            // pinky (-x) .. index (+x)
+      float fi = float(i);
+      float len = i == 0 ? 0.062 : i == 1 ? 0.077 : i == 2 ? 0.083 : 0.075;
+      float sp = (fi - 1.5) * 0.11, curl = 0.30 + 0.06 * fi;
+      vec3 a = vec3(-0.030 + 0.020 * fi, 0.002, 0.045);
+      vec3 b = a + fdir(sp, curl * 0.45) * len * 0.52;
+      vec3 c = b + fdir(sp, curl * 1.5) * len * 0.48;
+      d = smin(d, min(sdCapsule(p, a, b, 0.0098, 0.0088), sdCapsule(p, b, c, 0.0088, 0.0072)), 0.007);
+    }
+    vec3 ta = vec3(0.034, -0.002, -0.018);
+    vec3 tb = ta + normalize(vec3(0.75, 0.22, 0.62)) * 0.042;
+    vec3 tc = tb + normalize(vec3(0.30, 0.35, 0.89)) * 0.034;
+    d = smin(d, min(sdCapsule(p, ta, tb, 0.0125, 0.0105), sdCapsule(p, tb, tc, 0.0105, 0.0085)), 0.012);
+    return d;
+  }
+  // Both hands at body-space point q: evaluates the hand on q's side; local = hand-local point.
+  float handsSDF(vec3 q, out vec3 local, out int idx) {
+    idx = q.x < 0.0 ? 1 : 0;
+    local = uHandM[idx] * (vec3(abs(q.x), q.y, q.z) - uHandP[idx]);
+    return handSDF(local);
+  }
+  // Raymarch the hands along body-space ray rb (unit). Returns distance in metres (or -1) and the
+  // gold colour and opacity of the hit.
+  float hands(vec3 rb, out vec3 hcol, out float alpha) {
+    hcol = vec3(0.0); alpha = 0.0;
+    // Bounding sphere around both hands, raised or lowered.
+    vec3 C = vec3(0.0, -0.40, 0.28);
+    float b = dot(-C, rb), c = dot(C, C) - 0.40 * 0.40, h = b * b - c;
+    if (h < 0.0) return -1.0;
+    h = sqrt(h);
+    float t = max(-b - h, 0.02), t1 = -b + h;
+    vec3 pl; int idx;
+    bool hit = false;
+    for (int i = 0; i < 90; i++) {
+      float d = handsSDF(rb * t, pl, idx);
+      if (d < 0.0003) { hit = true; break; }
+      t += d;
+      if (t > t1) break;
+    }
+    if (!hit) return -1.0;
+    // Normal and view direction in hand-local space.
+    const vec2 e = vec2(0.0006, -0.0006);
+    vec3 n = normalize(e.xyy * handSDF(pl + e.xyy) + e.yyx * handSDF(pl + e.yyx) +
+                       e.yxy * handSDF(pl + e.yxy) + e.xxx * handSDF(pl + e.xxx));
+    vec3 v = uHandM[idx] * vec3(idx == 1 ? -rb.x : rb.x, rb.y, rb.z);
+    float rim = pow(1.0 - abs(dot(n, v)), 2.5);
+    // Rain flows from the fingertips to the wrist (-z); columns run across whichever side faces out.
+    float S = 60.0 * float(uDens);              // glyph cells per metre
+    bool sideOn = abs(n.x) > abs(n.y);
+    vec2 g = vec2((sideOn ? pl.y * sign(n.x) : pl.x * sign(n.y)) * S, -pl.z * S);
+    int key = 3000017 + idx * 7 + (sideOn ? 3 : 0) + (sideOn ? (n.x > 0.0 ? 1 : 0) : (n.y > 0.0 ? 1 : 0));
+    hcol = rain(g, ivec2(floor(g)), key, 1.1 + rim * 1.8, GOLD, GOLD_HEAD) * 1.25 + GOLD * rim * 0.12;
+    alpha = uHands * smoothstep(-0.22, -0.06, pl.z);   // the forearm fades out past the wrist
+    return t;
   }
 
   void main() {
@@ -343,7 +422,7 @@ function startGame() {
       int lc = int(floor(g.x)) - int(floor(u)) * 15 * uDens;
       vec3 tcol;
       if (wallText(m, tface, hf(h3(plane, face, tileAlong)), lc, ci.y, g, tcol)) col = tcol;
-      else col = rain(g, ci, plane * 4 + face, accent);
+      else col = rain(g, ci, plane * 4 + face, accent, GREEN, HEAD);
     } else if (vy < 0.0 || vy > 0.0) {
       // --- floor / ceiling ---
       bool floorHit = vy < 0.0;
@@ -365,14 +444,20 @@ function startGame() {
       ivec2 off = alongX ? ivec2(uOrigin.y * fc, uOrigin.x * fc * int(dir)) : ivec2(uOrigin.x * fc, uOrigin.y * fc * int(dir));
       ivec2 ci = ivec2(floor(g)) + off;
       // Floor seams along tile edges next to walls.
-      col = rain(g, ci, (floorHit ? 1000003 : 2000003) + (alongX ? 0 : 7), 0.0) * 0.85;
+      col = rain(g, ci, (floorHit ? 1000003 : 2000003) + (alongX ? 0 : 7), 0.0, GREEN, HEAD) * 0.85;
     } else {
       t = 1e9;
     }
 
     float dist = t * rlen;
     float fog = mix(0.025, 1.0, exp(-dist * 0.11));
-    outColor = vec4(col * fog, 1.0);
+    col *= fog;
+    if (uHands > 0.0) {
+      vec3 hcol; float ha;
+      float th = hands(vec3(uv.x * K, vy, cp - uv.y * K * sp) / rlen, hcol, ha);
+      if (th > 0.0 && th * 0.5 < dist) col = mix(col, hcol, ha);   // 1 tile = 2 m
+    }
+    outColor = vec4(col, 1.0);
   }`;
 
   const BLUR_FS = `#version 300 es
@@ -452,6 +537,37 @@ function startGame() {
   }
   window.addEventListener('resize', resize);
 
+  // Hand placement for the opening (body space, metres; see the shader). Hand 1 is the left hand,
+  // set up in x-mirrored space so both share one right-hand shape.
+  const handM = new Float32Array(18), handP = new Float32Array(6);
+  function setHandUniforms() {
+    const pose = intro.on ? Intro.pose(intro.t) : null;
+    const alpha = pose ? Math.min(1, pose.raise / 0.3) : 0;
+    gl.uniform1f(scene.u.uHands, alpha);
+    if (!alpha) return;
+    const t = state.time, low = 1 - pose.raise;
+    for (let i = 0; i < 2; i++) {
+      // Small unsteady tremor (a few mm), a slow breathing sway, and per-hand phase.
+      const sh = (f, ph) => Math.sin(t * f + ph + i * 1.9);
+      const tx = 0.0025 * (sh(7.3, 0) * 0.6 + sh(12.1, 1.1) * 0.4);
+      const ty = 0.0030 * (sh(8.7, 2.3) * 0.6 + sh(13.3, 0.4) * 0.4) + 0.005 * Math.sin(t * 1.5);
+      const tz = 0.0020 * sh(9.9, 0.8);
+      const yaw = -0.22 + 0.02 * sh(5.3, 0.2);
+      const tilt = -0.45 + 0.03 * sh(6.1, 1.7) + 0.5 * low;          // fingers droop as they lower
+      const roll = 0.15 + pose.turn * (2.6 + 0.1 * i) + 0.03 * sh(7.7, 2.9);
+      // local -> body rotation R = Ry(yaw) Rx(tilt) Rz(roll); the shader wants R^T.
+      const cy = Math.cos(yaw), sy = Math.sin(yaw), cx = Math.cos(tilt), sx = Math.sin(tilt), cz = Math.cos(roll), sz = Math.sin(roll);
+      const rx = (v) => [v[0], v[1] * cx - v[2] * sx, v[1] * sx + v[2] * cx];
+      const ry = (v) => [v[0] * cy + v[2] * sy, v[1], -v[0] * sy + v[2] * cy];
+      const R = (v) => ry(rx([v[0] * cz - v[1] * sz, v[0] * sz + v[1] * cz, v[2]]));
+      const ex = R([1, 0, 0]), ey = R([0, 1, 0]), ez = R([0, 0, 1]);
+      handM.set([ex[0], ey[0], ez[0], ex[1], ey[1], ez[1], ex[2], ey[2], ez[2]], i * 9);
+      handP.set([0.085 + tx, -0.30 + ty - 0.38 * low, 0.26 + tz - 0.06 * low], i * 3);
+    }
+    gl.uniformMatrix3fv(scene.u['uHandM[0]'], false, handM);
+    gl.uniform3fv(scene.u['uHandP[0]'], handP);
+  }
+
   function renderScene(fbo) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     gl.viewport(0, 0, canvas.width, canvas.height);
@@ -473,6 +589,7 @@ function startGame() {
     gl.uniform2i(scene.u.uOrigin, origin.x, origin.y);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, mapTex); gl.uniform1i(scene.u.uMap, 0);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, atlasTex); gl.uniform1i(scene.u.uAtlas, 1);
+    setHandUniforms();
     gl.bindVertexArray(vao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }

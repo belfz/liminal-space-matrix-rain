@@ -70,5 +70,10 @@ node tests/visual/stale-cache.mjs 73dc27a || fail=1
 # 8. Opening cutscene: plays on first entry, ignores look input, a key skips it, no replay.
 node tests/visual/intro.mjs "file://$PWD/index.html" || fail=1
 
+# 9. Golden hands: gold at the hold moment, none at the same pose without the intro or after it ends.
+shot "seed=2&still=1&intro=4" g1; shot "seed=2&still=1&p=-0.8" g0; shot "seed=2&still=1&intro=7.5" g2
+G1=$(python3 tests/visual/gold.py "$T/g1.png"); G0=$(python3 tests/visual/gold.py "$T/g0.png"); G2=$(python3 tests/visual/gold.py "$T/g2.png")
+if python3 -c "import sys; sys.exit(0 if $G1 > 0.01 and $G0 < 0.001 and $G2 < 0.001 else 1)"; then echo "ok   golden hands (hold $G1, no intro $G0, after $G2)"; else echo "FAIL golden hands (hold $G1, no intro $G0, after $G2)"; fail=1; fi
+
 rm -rf "$T"
 exit $fail
