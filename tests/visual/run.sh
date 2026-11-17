@@ -38,7 +38,7 @@ ok=all(min(abs(p[k]-q[k]), abs(abs(p[k]-q[k])-12)) < 1e-3 for p,q in zip(a,b) fo
 sys.exit(0 if ok and len(a)==len(b)>0 else 1)" "$A" "$B"; then echo "ok   motes world-stable"; else echo "FAIL motes world-stable"; fail=1; fi
 
 # 4. Mouse look works after "click to enter" even when pointer lock is refused.
-node tests/visual/mouse-look.mjs "file://$PWD/index.html" || fail=1
+node tests/visual/mouse-look.mjs "file://$PWD/index.html?intro=0" || fail=1
 
 # 5. Rain density: 2x means twice the glyph columns on the same wall (half the column spacing).
 #    Face-on close wall (seed=2 spawn, facing +y).
@@ -66,6 +66,9 @@ if python3 -c "import sys; sys.exit(0 if $1 > 800 and $2 < 0.05 else 1)"; then e
 # 7. Starts after an update even if the browser cached the old src/world.js (preview servers
 #    send max-age=3600). 73dc27a = last commit before world.js gained wall text.
 node tests/visual/stale-cache.mjs 73dc27a || fail=1
+
+# 8. Opening cutscene: plays on first entry, ignores look input, a key skips it, no replay.
+node tests/visual/intro.mjs "file://$PWD/index.html" || fail=1
 
 rm -rf "$T"
 exit $fail
