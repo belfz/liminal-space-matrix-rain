@@ -10,6 +10,9 @@ horizontal, often unfinished) with the rain running around it.
 
 **Run:** open `index.html` in a browser (no server, no build). Click to enter.
 
+The first time you enter, a short opening plays: you look down at your hands, and they are
+made of the rain too, in gold. Any key or click skips it.
+
 **Controls:** `WASD` / arrow keys to move · mouse to look around, up at the ceiling and down at the floor · `Esc` to leave.
 Where the browser grants pointer lock the mouse turns freely. Where it doesn't (e.g. embedded
 previews), mouse movement still turns, and resting the cursor near an edge keeps turning
@@ -19,7 +22,8 @@ previews), mouse movement still turns, and resting the cursor near an edge keeps
 cover each surface. Higher means finer, smaller code.
 
 **URL params:** `density=1|2|3` overrides the menu setting; `seed=N` picks a different world; `x`, `y`, `a` (angle, radians), `p` (pitch, radians), `t` (time)
-set the start; `still=1` freezes time and input (used for screenshots); `text=0` hides wall text.
+set the start; `still=1` freezes time and input (used for screenshots); `text=0` hides wall text;
+`intro=0` skips the opening (with `still=1`, `intro=<seconds>` freezes it at that moment).
 
 **Dev:** `npm test` runs the world-generation and collision tests (Node 24, no dependencies).
 `npm run test:visual` runs headless-Chrome visual checks (rain and motes stay put when the
