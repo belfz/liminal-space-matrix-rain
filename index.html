@@ -562,7 +562,7 @@ function startGame() {
       const R = (v) => ry(rx([v[0] * cz - v[1] * sz, v[0] * sz + v[1] * cz, v[2]]));
       const ex = R([1, 0, 0]), ey = R([0, 1, 0]), ez = R([0, 0, 1]);
       handM.set([ex[0], ey[0], ez[0], ex[1], ey[1], ez[1], ex[2], ey[2], ez[2]], i * 9);
-      handP.set([0.085 + tx, -0.30 + ty - 0.38 * low, 0.26 + tz - 0.06 * low], i * 3);
+      handP.set([0.095 + tx, -0.30 + ty - 0.38 * low, 0.26 + tz - 0.06 * low], i * 3);
     }
     gl.uniformMatrix3fv(scene.u['uHandM[0]'], false, handM);
     gl.uniform3fv(scene.u['uHandP[0]'], handP);
@@ -725,9 +725,13 @@ function startGame() {
 
   // ---------- input ----------
   const keys = new Set();
-  // Any key or click during the opening skips it (Esc still leaves to the menu as well).
-  addEventListener('keydown', () => { if (!STILL) endIntro(); });
-  addEventListener('mousedown', () => { if (entered && !STILL) endIntro(); });
+  // Any key or click during the opening skips it (Esc still leaves to the menu as well). Not in
+  // its first moments (a habitual double-click on "click to enter" would skip it unseen), and
+  // not lone modifier keys (the start of a shortcut, e.g. a screenshot).
+  const MODIFIERS = ['Shift', 'Control', 'Alt', 'Meta'];
+  const skipIntro = () => { if (!STILL && intro.t > 0.4) endIntro(); };
+  addEventListener('keydown', (e) => { if (!MODIFIERS.includes(e.key)) skipIntro(); });
+  addEventListener('mousedown', () => { if (entered) skipIntro(); });
   addEventListener('keydown', (e) => { keys.add(e.code); if (e.code.startsWith('Arrow')) e.preventDefault(); });
   addEventListener('keyup', (e) => keys.delete(e.code));
   addEventListener('blur', () => keys.clear());

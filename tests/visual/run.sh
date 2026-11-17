@@ -70,10 +70,15 @@ node tests/visual/stale-cache.mjs 73dc27a || fail=1
 # 8. Opening cutscene: plays on first entry, ignores look input, a key skips it, no replay.
 node tests/visual/intro.mjs "file://$PWD/index.html" || fail=1
 
-# 9. Golden hands: gold at the hold moment, none at the same pose without the intro or after it ends.
-shot "seed=2&still=1&intro=4" g1; shot "seed=2&still=1&p=-0.8" g0; shot "seed=2&still=1&intro=7.5" g2
-G1=$(python3 tests/visual/gold.py "$T/g1.png"); G0=$(python3 tests/visual/gold.py "$T/g0.png"); G2=$(python3 tests/visual/gold.py "$T/g2.png")
-if python3 -c "import sys; sys.exit(0 if $G1 > 0.01 and $G0 < 0.001 and $G2 < 0.001 else 1)"; then echo "ok   golden hands (hold $G1, no intro $G0, after $G2)"; else echo "FAIL golden hands (hold $G1, no intro $G0, after $G2)"; fail=1; fi
+# 9. Golden hands: gold with palms up, none at the same pose without the intro (no hands after the
+#    intro ends is checked in intro.mjs). Mid-turn the thumbs must not meet at the centre line
+#    (each half of the screen only draws its own hand, so meeting thumbs get cut flat).
+shot "seed=2&still=1&intro=3.2" g1; shot "seed=2&still=1&p=-0.8" g0
+G1=$(python3 tests/visual/gold.py "$T/g1.png"); G0=$(python3 tests/visual/gold.py "$T/g0.png")
+if python3 -c "import sys; sys.exit(0 if $G1 > 0.02 and $G0 < 0.001 else 1)"; then echo "ok   golden hands (palms up $G1, no intro $G0)"; else echo "FAIL golden hands (palms up $G1, no intro $G0)"; fail=1; fi
+tools/shot.sh "seed=2&still=1&intro=4.6" "$T/g3.png" 960,540
+GC=$(python3 tests/visual/gold.py "$T/g3.png" 0.49 0.51)
+if python3 -c "import sys; sys.exit(0 if $GC < 0.015 else 1)"; then echo "ok   hands apart at the centre line ($GC)"; else echo "FAIL hands apart at the centre line ($GC)"; fail=1; fi
 
 rm -rf "$T"
 exit $fail

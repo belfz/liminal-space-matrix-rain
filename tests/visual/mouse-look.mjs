@@ -1,5 +1,6 @@
 // Mouse look must work after "click to enter" even when the browser refuses pointer lock
-// (headless Chrome always refuses, so this exercises the fallback). Usage: node mouse-look.mjs <file-url>
+// (headless Chrome always refuses, so this exercises the fallback). Usage: node mouse-look.mjs <file-url>?intro=0
+// (intro=0: the opening cutscene would hold the camera for its first seconds)
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
