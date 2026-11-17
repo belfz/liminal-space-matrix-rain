@@ -20,6 +20,7 @@ previews), mouse movement still turns, and resting the cursor near an edge keeps
 
 **Menu:** *rain density* `1×` / `2×` / `3×` (default `2×`, remembered): how many glyph columns
 cover each surface. Higher means finer, smaller code.
+Pausing with `Esc` also shows how far you've walked this session (steps and metres).
 
 **URL params:** `density=1|2|3` overrides the menu setting; `seed=N` picks a different world; `x`, `y`, `a` (angle, radians), `p` (pitch, radians), `t` (time)
 set the start; `still=1` freezes time and input (used for screenshots); `text=0` hides wall text;

@@ -80,5 +80,8 @@ tools/shot.sh "seed=2&still=1&intro=4.6" "$T/g3.png" 960,540
 GC=$(python3 tests/visual/gold.py "$T/g3.png" 0.49 0.51)
 if python3 -c "import sys; sys.exit(0 if $GC < 0.015 else 1)"; then echo "ok   hands apart at the centre line ($GC)"; else echo "FAIL hands apart at the centre line ($GC)"; fail=1; fi
 
+# 10. Walked counter: not on the splash, shown in the pause menu, no walking while paused.
+node tests/visual/pause.mjs "file://$PWD/index.html?intro=0" || fail=1
+
 rm -rf "$T"
 exit $fail

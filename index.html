@@ -17,6 +17,8 @@
   #overlay .title { font-size: 28px; letter-spacing: 0.4em; }
   #overlay .hint { opacity: 0.6; font-size: 12px; }
   #overlay.hidden { display: none; }
+  #overlay .walked { display: none; font-size: 13px; opacity: 0.85; }
+  #overlay.paused .walked { display: block; }   /* only in the pause menu, not on the splash */
   #overlay .setting { display: flex; gap: 0.6em; align-items: center; font-size: 13px; }
   #overlay .setting button {
     font: inherit; color: #00ff41; background: none; border: 1px solid rgba(0, 255, 65, 0.35);
@@ -30,6 +32,7 @@
 <canvas id="c"></canvas>
 <div id="overlay">
   <div class="title">LIMINAL RAIN</div>
+  <div class="walked"></div>
   <div>click to enter</div>
   <div class="setting">rain density
     <button data-density="1">1&times;</button><button data-density="2">2&times;</button><button data-density="3">3&times;</button>
@@ -753,10 +756,19 @@ function startGame() {
       if (r && r.catch) r.catch(() => {});   // refused: stay in unlocked mouse-look mode
     } catch (_) { /* same */ }
   }
+  // Distance walked this session, in tiles (1 tile = 2 m; a step is ~0.75 m). Shown when paused.
+  let walked = 0;
+  function walkedText() {
+    const m = walked * 2, steps = Math.round(m / 0.75);
+    const dist = m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(2)} km`;
+    return `walked ${steps.toLocaleString('en-US')} steps &middot; ${dist}`;
+  }
   function leave() {
     endIntro();
     entered = false;
     mouseX = mouseY = -1;
+    overlay.querySelector('.walked').innerHTML = walkedText();
+    overlay.classList.add('paused');
     overlay.classList.remove('hidden');
   }
   overlay.addEventListener('click', enter);
@@ -798,7 +810,7 @@ function startGame() {
 
   const isWall = (tx, ty) => World.tileAt(tx, ty, seed) === 1;
   function update(dt) {
-    if (intro.on) return;   // the cutscene owns the camera
+    if (!entered || intro.on) return;   // paused, or the cutscene owns the camera
     const k = (c) => keys.has(c);
     const fwdIn = (k('KeyW') || k('ArrowUp') ? 1 : 0) - (k('KeyS') || k('ArrowDown') ? 1 : 0);
     const strafe = (k('KeyD') ? 1 : 0) - (k('KeyA') ? 1 : 0)
@@ -810,7 +822,9 @@ function startGame() {
     const len = Math.hypot(dx, dy);
     if (len > 0) {
       dx = (dx / len) * 2.2 * dt; dy = (dy / len) * 2.2 * dt;
+      const from = state.pos;
       state.pos = World.moveWithCollision(state.pos, dx, dy, 0.2, isWall);
+      walked += Math.hypot(state.pos.x - from.x, state.pos.y - from.y);   // real movement, not pushing into walls
       state.bob += dt * 1.6 * Math.PI * 2;
     }
   }
@@ -835,7 +849,7 @@ function startGame() {
   }
   requestAnimationFrame(frame);
 
-  window.LR = { state, settings, intro, renderScene, render, resize, gl, canvas };
+  window.LR = { state, settings, intro, get walked() { return walked; }, renderScene, render, resize, gl, canvas };
 }
 
 // Load the scripts with a fresh URL every time: some servers (e.g. T3 Code's preview) let the
