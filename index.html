@@ -694,15 +694,16 @@ function startGame() {
   window.LR = { state, settings, renderScene, render, resize, gl, canvas };
 }
 
-// Load the world logic with a fresh URL every time: some servers (e.g. T3 Code's preview) let the
-// browser cache files for an hour, and a normal reload would pair a new page with an old world.js.
-(() => {
+// Load the scripts with a fresh URL every time: some servers (e.g. T3 Code's preview) let the
+// browser cache files for an hour, and a normal reload would pair a new page with old scripts.
+(function load(files) {
+  if (!files.length) return startGame();
   const s = document.createElement('script');
-  s.src = 'src/world.js?v=' + Date.now();
-  s.onload = startGame;
-  s.onerror = () => showFatal('could not load src/world.js');
+  s.src = files[0] + '?v=' + Date.now();
+  s.onload = () => load(files.slice(1));
+  s.onerror = () => showFatal('could not load ' + files[0]);
   document.head.appendChild(s);
-})();
+})(['src/world.js', 'src/intro.js']);
 </script>
 </body>
 </html>

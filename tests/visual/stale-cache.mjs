@@ -3,7 +3,7 @@
 // revalidates the page itself). Loads OLD_REV, swaps in the working tree, reloads, checks it runs.
 // Usage: node stale-cache.mjs <old-git-rev>
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, extname } from 'node:path';
@@ -46,7 +46,8 @@ try {
   await send('Runtime.enable'); await send('Network.enable');
   await send('Page.navigate', { url }); await sleep(2500);
   // Update to the working tree, then a normal (non-forced) reload.
-  for (const f of ['index.html', 'src/world.js']) put(f, readFileSync(f));
+  // Every current file: the page plus all of src/ (new scripts appear over time).
+  for (const f of ['index.html', ...readdirSync('src').map((n) => 'src/' + n)]) put(f, readFileSync(f));
   errors = [];
   await send('Page.reload', { ignoreCache: false }); await sleep(3000);
   const started = await ev(`typeof LR === 'object' && !!document.querySelector('[data-density].on')`);
